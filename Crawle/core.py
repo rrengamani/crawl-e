@@ -298,7 +298,7 @@ class HTTPConnectionControl(object):
             retryReturn['url'] = url
             return retryReturn
 
-        if self.auth and not self.auth.verifyBody(body):
+        if self.auth and not self.auth.isValidBody(body):
             return {'status':-5, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
 
