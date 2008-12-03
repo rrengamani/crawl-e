@@ -72,7 +72,7 @@ class URLQueue(PyroQueue):
             url = self.queue.pop(0)
             if size % 1000 is 0:
                 print "Queue Size: %d" % size
-            self.lock.release()
+        self.lock.release()
         return url
 
     def put(self,url):

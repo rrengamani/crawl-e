@@ -1,7 +1,8 @@
 import httplib, socket, sys, threading, urlparse
-import Pyro.core
+import Pyro.core, Pyro.protocol
 
 CONNECTION_TIMEOUT = 30
+EMPTY_QUEUE_WAIT = 5
 MAX_DEPTH = 10
 STOP_CRAWLE = False
 
@@ -17,17 +18,10 @@ def runCrawle(argv, handler, auth=None):
     controller = Controller(handler=handler, auth=auth, RMI_URL=rmi_url,
                             numThreads=threads)
     controller.start()
-
     try:
-        sys.stderr.write("---ctrl+c to quit---\n")
-        sys.stderr.flush()
-        while sys.stdin.readline():
-            pass
+        controller.join()
     except KeyboardInterrupt:
-        pass
-
-    controller.stop()
-
+        controller.stop()
 
 class Auth(object):
     """An _abstract_ class for handling authentication.
@@ -325,6 +319,8 @@ class HTTPConnectionControl(object):
 class ControlThread(threading.Thread):
     """A single thread of control"""
 
+    stop_wait_event = threading.Event()
+
     def __init__(self, connectionControl, handler, RMI_URL, auth=None):
         """Sets up the ControlThread.
 
@@ -355,21 +351,33 @@ class ControlThread(threading.Thread):
             # Get the URL to retrieve
             try:
                 url = self.rmi.get()
-            except:
-                sys.stderr.write("RMI.get failed. Thread shutting down\n")
-                sys.stderr.flush()
-                STOP_CRAWLE = True
+            except Pyro.protocol.ProtocolError:
+                if not STOP_CRAWLE:
+                    sys.stderr.write("Queue unreachable - stopping CRAWL-E\n")
+                    sys.stderr.flush()
+                    STOP_CRAWLE = True
                 break
 			
             if url is None:
+                ControlThread.stop_wait_event.clear()
+                ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
+                if ControlThread.stop_wait_event.isSet():
+                    continue
+
                 if self.auth:
                     self.auth.stop()
+                if not STOP_CRAWLE:
+                    sys.stderr.write("Queue empty - stopping CRAWL-E\n")
+                    sys.stderr.flush()
                     STOP_CRAWLE = True
-                    break
+                break
 
             response = self.connectionControl.request(url, 0)
             if response:
                 self.handler.process(response, self.rmi)
+
+            # Now release waiting threads
+            ControlThread.stop_wait_event.set()            
 
 class Controller(object):
     """The primary controller manages all the threads."""
@@ -393,6 +401,7 @@ class Controller(object):
                                                      doRedirect=doRedirect)
         self.auth = auth
         self.handler = handler
+        self.already_stopped = False
 
         for x in range(numThreads):
             thread = ControlThread(handler=handler,
@@ -409,7 +418,10 @@ class Controller(object):
         """Join on all threads"""
         count = 0
         for thread in self.threads:
-            thread.join()
+            while 1:
+                thread.join(1)
+                if not thread.isAlive():
+                    break
             count += 1
             sys.stderr.write("%d threads closed\r" % count)
             sys.stderr.flush()

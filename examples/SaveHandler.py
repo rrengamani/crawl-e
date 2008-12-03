@@ -23,6 +23,7 @@ class SaveURLHandler(Crawle.core.Handler):
         else:
             self.lock.acquire()
             if self.exit:
+                self.lock.release()
                 return
             self.output.write(info['body'])
             self.output.write("===*===\n")
