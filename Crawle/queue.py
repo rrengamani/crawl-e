@@ -104,8 +104,7 @@ if __name__ == '__main__':
     daemon=Pyro.core.Daemon()
     uri=daemon.connect(queueHandler, "URLQueue")
 
-    print "Starting URLQueue on port:", daemon.port
-    print "The object's uri is:", uri
+    print "PYROLOC://%s:%d/URLQueue" % (daemon.hostname, daemon.port)
 
     try:
         daemon.requestLoop()

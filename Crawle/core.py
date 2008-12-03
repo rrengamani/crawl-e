@@ -3,9 +3,9 @@ import Pyro.core
 
 CONNECTION_TIMEOUT = 30
 MAX_DEPTH = 10
-STOP_THREADS = False
+STOP_CRAWLE = False
 
-def runCrawle(argv, handler):
+def runCrawle(argv, handler, auth=None):
     """The typical to start CRAWL-E"""
     try:
         rmi_url = argv[1].strip()
@@ -14,15 +14,15 @@ def runCrawle(argv, handler):
         sys.stderr.write("Usage: %s rmi_url threads\n" % argv[0])
         sys.exit(1)
 
-    controller = Controller(handler=handler, RMI_URL=rmi_url,
+    controller = Controller(handler=handler, auth=auth, RMI_URL=rmi_url,
                             numThreads=threads)
     controller.start()
 
     try:
-        text = ''
-        while text != 'quit\n':
-            print "---Type quit to exit---"
-            text = sys.stdin.readline()
+        sys.stderr.write("---ctrl+c to quit---\n")
+        sys.stderr.flush()
+        while sys.stdin.readline():
+            pass
     except KeyboardInterrupt:
         pass
 
@@ -69,7 +69,7 @@ class Auth(object):
         """This function should be extended in a subclass to handle
         termination.
         """
-	sys.stderr.write("Handler.save() is not implemented\n")
+	sys.stderr.write("Auth.save() is not implemented\n")
         sys.stderr.flush()
 
 
@@ -119,6 +119,14 @@ class HTTPConnectionQueue(object):
         self.queue = []
         self.size = 0
 
+    def closeConnections(self):
+        self.lock.acquire()
+        sys.stderr.write("Closing %d connections\n" % len(self.queue))
+        sys.stderr.flush()
+        for connection in self.queue:
+            connection.close()
+        self.lock.release()
+
     def getConnection(self):
         """Return a HTTPConnection object for the appropriate address.
         
@@ -140,6 +148,9 @@ class HTTPConnectionQueue(object):
         return connection
 
     def putSocket(self, connection):
+        if STOP_CRAWLE:
+            connection.close()
+            return
         """Put the HTTPConenction object back on the queue."""            
         self.lock.acquire()
         self.size += 1
@@ -156,8 +167,7 @@ class HTTPConnectionControl(object):
     
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, auth=None, requestLimit=999,
-                 doRedirect=True):
+    def __init__(self, handler, auth=None, requestLimit=-1, doRedirect=True):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
@@ -166,14 +176,13 @@ class HTTPConnectionControl(object):
         auth -- The Auth class for getting the next header (Default None).
         requestLimit -- The maximum number of requests a HTTP session can make.
                         When reached, the connection is closed and a new
-                        connection is established in its place (Default 999).
+                        connection is established in its place (Default -1).
         doRedirect -- If true, the redirected URL will automatically be placed
                       back on the queue. Otherwise the Handler process
                       function will have to handle a return with a HTTP
                       redirect status.
         """
         
-        self.running = True
         self.connectionQueues = {}
         self.lock = threading.Lock()
         self.handler = handler
@@ -189,7 +198,7 @@ class HTTPConnectionControl(object):
 
     def stop(self):
         """Used to indicate to stop processing requests"""
-        self.running = False
+        [q.closeConnections() for q in self.connectionQueues.itervalues()]
 
     def request(self, url, depth):
         """Handles the request to the server.
@@ -202,14 +211,14 @@ class HTTPConnectionControl(object):
             -1.0 -- Response not ready
             -1.1 -- Bad status line
             -1.2 -- Socket error
-            -1.3 -- Unhandled exception (email Bryce - bboe@cs.ucsb.edu)
+            -1.3 -- Unhandled exception
             -2   -- Stop has been called
             -3   -- Redirect depth has been exceeded
             -4   -- Unsupported protocol (only HTTP currently supported)
             -5   -- Auth class returned None
             -6   -- gethostbyname failed
         """
-        if not self.running:
+        if STOP_CRAWLE:
             return {'status':-2, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
         if depth > MAX_DEPTH:
@@ -316,8 +325,7 @@ class HTTPConnectionControl(object):
 class ControlThread(threading.Thread):
     """A single thread of control"""
 
-    def __init__(self, connectionControl, handler, RMI_URL, auth=None,
-                 requestLimit=999):
+    def __init__(self, connectionControl, handler, RMI_URL, auth=None):
         """Sets up the ControlThread.
 
         Keyword Arguments:
@@ -328,38 +336,35 @@ class ControlThread(threading.Thread):
                    separately to the RMI server.
         auth -- The optional auth class which can provide cookies, deal with
                 rate limiting, etc.
-        requestLimit -- See HTTPConnectionControl.
         """
         threading.Thread.__init__(self)
         self.connectionControl = connectionControl
         self.handler = handler;
         self.auth = auth
-        self.requestLimit = requestLimit
-        self.resets = 0
         self.rmi = Pyro.core.getProxyForURI(RMI_URL)
 
     def run(self):
         """This is the execution order of a single thread.
         
-        The threads will stop when STOP_THREADS become true, when the RMI
+        The threads will stop when STOP_CRAWLE becomes true, when the RMI
         server is shutdown, and when a returned url is None.
         """
 
-        global STOP_THREADS
-        while not STOP_THREADS:
+        global STOP_CRAWLE
+        while not STOP_CRAWLE:
             # Get the URL to retrieve
             try:
                 url = self.rmi.get()
             except:
                 sys.stderr.write("RMI.get failed. Thread shutting down\n")
                 sys.stderr.flush()
-                STOP_THREADS = True
+                STOP_CRAWLE = True
                 break
 			
             if url is None:
                 if self.auth:
                     self.auth.stop()
-                    STOP_THREADS = True
+                    STOP_CRAWLE = True
                     break
 
             response = self.connectionControl.request(url, 0)
@@ -370,7 +375,7 @@ class Controller(object):
     """The primary controller manages all the threads."""
 	
     def __init__(self, handler, RMI_URL, auth=None, numThreads=1,
-                 requestLimit=999, doRedirect=True):
+                 requestLimit=-1, doRedirect=True):
         """Create the controller object
 
         Keyword Arguments:
@@ -382,17 +387,17 @@ class Controller(object):
         doRedirect -- If true redirects will transparently be handled
         """
         self.threads = []
-        connection_control = HTTPConnectionControl(auth=auth, handler=handler,
-                                                   requestLimit=requestLimit,
-                                                   doRedirect=doRedirect)
+        self.connection_ctrl = HTTPConnectionControl(auth=auth,
+                                                     handler=handler,
+                                                     requestLimit=requestLimit,
+                                                     doRedirect=doRedirect)
         self.auth = auth
         self.handler = handler
 
         for x in range(numThreads):
             thread = ControlThread(handler=handler,
                                    RMI_URL=RMI_URL, auth=auth,
-                                   connectionControl = connection_control,
-                                   requestLimit = requestLimit)
+                                   connectionControl = self.connection_ctrl)
             self.threads.append(thread)
 
     def start(self):
@@ -402,17 +407,22 @@ class Controller(object):
 
     def join(self):
         """Join on all threads"""
+        count = 0
         for thread in self.threads:
             thread.join()
-            sys.stderr.write("Thread %s returned\r" % thread)
+            count += 1
+            sys.stderr.write("%d threads closed\r" % count)
             sys.stderr.flush()
+        sys.stderr.write("                        \n")
+        sys.stderr.flush()
 
     def stop(self):
         """Stops all threads gracefully"""
-        global STOP_THREADS
+        global STOP_CRAWLE
+        STOP_CRAWLE = True
         sys.stderr.write("Stop received\n")
         sys.stderr.flush()
-        STOP_THREADS = True
+        self.connection_ctrl.stop()
         self.join()
         if self.auth:
             self.auth.save()
