@@ -133,7 +133,7 @@ class HTTPConnectionQueue(object):
         self.lock.acquire()
         if self.size is 0:
             self.lock.release()
-            new = httplib.HTTPConnection(self.address)
+            new = httplib.HTTPConnection(*self.address)
             new.requestCount = 1
             return new
         connection = self.queue.pop(0)
@@ -208,7 +208,7 @@ class HTTPConnectionControl(object):
             -1.3 -- Unhandled exception
             -2   -- Stop has been called
             -3   -- Redirect depth has been exceeded
-            -4   -- Unsupported protocol (only HTTP currently supported)
+            -4   -- Unsupported scheme (only HTTP currently supported)
             -5   -- Auth class returned None
             -6   -- gethostbyname failed
         """
@@ -219,12 +219,11 @@ class HTTPConnectionControl(object):
             return {'status':-3, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
 
-        protocol, domain, request, _, parameters, _ = urlparse.urlparse(url)
-        if parameters != '':
-            request = '?'.join((request, parameters))
+        u = urlparse.urlparse(url)
+        request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
 
         try:
-            address = socket.gethostbyname(domain)
+            address = (socket.gethostbyname(u.hostname), u.port)
         except socket.error:
             return {'status':-6, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
@@ -239,7 +238,7 @@ class HTTPConnectionControl(object):
         connection = connectionQueue.getConnection()
             
         if connection.requestCount is self.requestLimit:
-            self.__resetConnection(connection,address)
+            self.__resetConnection(connection, address)
 
         if self.auth:
             headers = self.auth.getNextHeader(url)
@@ -248,13 +247,13 @@ class HTTPConnectionControl(object):
                         'final_url':url}
         else:
             headers = {}
-        headers['Host'] = domain
+        headers['Host'] = u.hostname
 
         # This should be deleted at somepoint when https is handled
         # It needs to be here because it needs to be checked after
         # auth.getNextHeader in cases where reauthentication is
         # required.
-        if protocol != 'http':
+        if u.scheme != 'http':
             return {'status':-4, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
         # This needs to be checked here after we checked
@@ -280,10 +279,10 @@ class HTTPConnectionControl(object):
             connection.close()
             return {'status':-1.1, 'headers':'', 'body':'', 'url':url,
                     'final_url':url}
-        except socket.error:
+        except socket.error, e:
             connection.close()
             return {'status':-1.2, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'extra':e}
         except:
             sys.stderr.write('Unhandled exception -- FIXY TIME\n')
             sys.stderr.flush()
