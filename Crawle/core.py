@@ -6,7 +6,7 @@ EMPTY_QUEUE_WAIT = 5
 MAX_DEPTH = 10
 STOP_CRAWLE = False
 
-def runCrawle(argv, handler, auth=None):
+def runCrawle(argv, handler, doRedirect=True):
     """The typical to start CRAWL-E"""
     try:
         rmi_url = argv[1].strip()
@@ -15,56 +15,13 @@ def runCrawle(argv, handler, auth=None):
         sys.stderr.write("Usage: %s rmi_url threads\n" % argv[0])
         sys.exit(1)
 
-    controller = Controller(handler=handler, auth=auth, RMI_URL=rmi_url,
-                            numThreads=threads)
+    controller = Controller(handler=handler, RMI_URL=rmi_url,
+                            numThreads=threads, doRedirect=doRedirect)
     controller.start()
     try:
         controller.join()
     except KeyboardInterrupt:
         controller.stop()
-
-class Auth(object):
-    """An _abstract_ class for handling authentication.
-    Python doesn't have real abstract classes, but its cool
-
-    The variable terminate is checked periodically to see if the threads
-    which hold this class should shutdown.
-    """
-
-    terminate = False
-    
-    def getNextHeader(self, url):
-        """Return the next header to use in the HTTP request.
-
-	Additionally this function can be used to verify that the user is
-	still logged in through the URL.
-	"""
-	raise NotImplementedError(' '.join(('Auth.getNextHeader must be',
-					    'defined in a subclass')))
-
-    def isValidBody(self, body):
-        """Function called by to verify the body of the request is as expected.
-
-	By default this function always returns True unless it is extended in
-        a subclass.
-	"""
-	return True
-    
-    def stop(self):
-        """Called when getNextURL returns none.
-
-	This is useful to avoid sleeping and to allow threads to close
-	cleanly. This function need not be extended by a subclass, however
-	subclasses should check the value of terminate in getNextHeader.
-	"""
-	self.terminate = True
-
-    def save(self):
-        """This function should be extended in a subclass to handle
-        termination.
-        """
-	sys.stderr.write("Auth.save() is not implemented\n")
-        sys.stderr.flush()
 
 
 class Handler(object):
@@ -73,6 +30,18 @@ class Handler(object):
     such a way so that they are threadsafe as multiple threads will have
     access to the same instance.
     """
+
+    def preProcess(self, queue_item):
+        """PreProcess is called directly before making the reqeust.
+        This function must return three values:
+            url     - the url to fetch
+            headers - the headers to send with the url. Can be None or False.
+                      None means don't add any specific headers, and False
+                      indicates that the crawl should terminate.
+            extra   - Anything additional information to pass along. Can be
+                      None.
+        """
+        return queue_item, None, None
     
     def process(self, info, rmi):
         """Process is called after the request has been made. It needs to be
@@ -81,10 +50,12 @@ class Handler(object):
         Keyword Arguments:
         info -- a dictionary containing:
                     status -- the returned HTTP status
+                    headers -- the HTTP response headers
                     body -- the page content
                     url -- the initial requested url
                     final_url -- the final url after redirects
-                    headers -- the HTTP response headers
+                    url_headers -- the HTTP request headers
+                    url_extra -- Extra user provided information
         rmi -- the PythonRMI object.
         """
         raise NotImplementedError(' '.join(('Handler.process must be defined',
@@ -161,13 +132,12 @@ class HTTPConnectionControl(object):
     
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, auth=None, requestLimit=-1, doRedirect=True):
+    def __init__(self, handler, requestLimit=-1, doRedirect=True):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
         Keyword Arguments:
         handler -- The Handler class for checking if a url is valid.
-        auth -- The Auth class for getting the next header (Default None).
         requestLimit -- The maximum number of requests a HTTP session can make.
                         When reached, the connection is closed and a new
                         connection is established in its place (Default -1).
@@ -180,7 +150,6 @@ class HTTPConnectionControl(object):
         self.connectionQueues = {}
         self.lock = threading.Lock()
         self.handler = handler
-        self.auth = auth
         self.requestLimit = requestLimit
         self.doRedirect = doRedirect
 
@@ -194,11 +163,11 @@ class HTTPConnectionControl(object):
         """Used to indicate to stop processing requests"""
         [q.closeConnections() for q in self.connectionQueues.itervalues()]
 
-    def request(self, url, depth):
+    def request(self, url, depth, url_headers, url_extra=None):
         """Handles the request to the server.
 
         On success, return a dictionary containing:
-        status, headers, body, url, final_url
+        status, headers, body, url, final_url, url_headers, url_extra
         as described in handler	process.
 
         On failure the status values are negative and mean the following:
@@ -209,15 +178,17 @@ class HTTPConnectionControl(object):
             -2   -- Stop has been called
             -3   -- Redirect depth has been exceeded
             -4   -- Unsupported scheme (only HTTP currently supported)
-            -5   -- Auth class returned None
+            -5   -- Queue indicated no valid headers
             -6   -- gethostbyname failed
         """
         if STOP_CRAWLE:
             return {'status':-2, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
         if depth > MAX_DEPTH:
             return {'status':-3, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                     'url_extra':url_extra}
 
         u = urlparse.urlparse(url)
         request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
@@ -226,7 +197,8 @@ class HTTPConnectionControl(object):
             address = (socket.gethostbyname(u.hostname), u.port)
         except socket.error:
             return {'status':-6, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
 
         self.lock.acquire()
         try:
@@ -240,28 +212,21 @@ class HTTPConnectionControl(object):
         if connection.requestCount is self.requestLimit:
             self.__resetConnection(connection, address)
 
-        if self.auth:
-            headers = self.auth.getNextHeader(url)
-            if headers is None:
-                return {'status':-5, 'headers':'', 'body':'', 'url':url,
-                        'final_url':url}
+        if url_headers is False:
+            return {'status':-5, 'headers':'', 'body':'', 'url':url,
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
+        elif url_headers:
+            headers = url_headers
         else:
             headers = {}
         headers['Host'] = u.hostname
 
         # This should be deleted at somepoint when https is handled
-        # It needs to be here because it needs to be checked after
-        # auth.getNextHeader in cases where reauthentication is
-        # required.
         if u.scheme != 'http':
             return {'status':-4, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
-        # This needs to be checked here after we checked
-        # our auth header, otherwise we might not know
-        # when to log back in, or put the url back on the
-        # queue
-        if not self.handler.isValidURL(url):
-            return None
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
 
         try:
             connection.request('GET', request, '', headers)
@@ -274,45 +239,44 @@ class HTTPConnectionControl(object):
             sys.stderr.flush()
             connection.close()
             return {'status':-1.0, 'headers':'', 'body':'', 'url':url, 
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
         except httplib.BadStatusLine:
             connection.close()
             return {'status':-1.1, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
         except socket.error, e:
             connection.close()
             return {'status':-1.2, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'extra':e}
+                    'final_url':url, 'extra':e , 'url_headers':url_headers,
+                    'url_extra':url_extra}
         except:
             sys.stderr.write('Unhandled exception -- FIXY TIME\n')
             sys.stderr.flush()
             connection.close()
             return {'status':-1.3, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
+                    'final_url':url, 'url_headers':url_headers,
+                    'url_extra':url_extra}
 
         # Handle redirecting by first verifying the URL
         # and then making the request. Return the response.
         if self.doRedirect and response.status in (301,302):
             url1 = urlparse.urljoin(url, response.getheader('Location'))
-            retryReturn = self.request(url1, depth + 1)
+            retryReturn = self.request(url1, depth + 1, url_headers, url_extra)
             if retryReturn == None:
                 return None
             retryReturn['url'] = url
             return retryReturn
 
-        if self.auth and not self.auth.isValidBody(body):
-            return {'status':-5, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url}
-
         toReturn = {}
         toReturn['status'] = response.status
-        try: # This only works in Python 2.5
-            toReturn['headers'] = response.getheaders()
-        except:
-            toReturn['headers'] = None
+        toReturn['headers'] = dict(response.getheaders())
         toReturn['body'] = body
         toReturn['url'] = url
         toReturn['final_url'] = url
+        toReturn['url_headers'] = url_headers
+        toReturn['url_extra'] = url_extra
         return toReturn
 
 class ControlThread(threading.Thread):
@@ -320,7 +284,7 @@ class ControlThread(threading.Thread):
 
     stop_wait_event = threading.Event()
 
-    def __init__(self, connectionControl, handler, RMI_URL, auth=None):
+    def __init__(self, connectionControl, handler, RMI_URL):
         """Sets up the ControlThread.
 
         Keyword Arguments:
@@ -329,13 +293,10 @@ class ControlThread(threading.Thread):
         handler -- The handler class for parsing the returned information
         RMI_URL -- The RMI initilization URL. Each thread needs to connect
                    separately to the RMI server.
-        auth -- The optional auth class which can provide cookies, deal with
-                rate limiting, etc.
         """
         threading.Thread.__init__(self)
         self.connectionControl = connectionControl
         self.handler = handler;
-        self.auth = auth
         self.rmi = Pyro.core.getProxyForURI(RMI_URL)
 
     def run(self):
@@ -349,7 +310,7 @@ class ControlThread(threading.Thread):
         while not STOP_CRAWLE:
             # Get the URL to retrieve
             try:
-                url = self.rmi.get()
+                queue_item = self.rmi.get()
             except Pyro.protocol.ProtocolError:
                 if not STOP_CRAWLE:
                     sys.stderr.write("Queue unreachable - stopping CRAWL-E\n")
@@ -357,21 +318,21 @@ class ControlThread(threading.Thread):
                     STOP_CRAWLE = True
                 break
 			
-            if url is None:
+            if queue_item is None:
                 ControlThread.stop_wait_event.clear()
                 ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
                 if ControlThread.stop_wait_event.isSet():
                     continue
 
-                if self.auth:
-                    self.auth.stop()
                 if not STOP_CRAWLE:
                     sys.stderr.write("Queue empty - stopping CRAWL-E\n")
                     sys.stderr.flush()
                     STOP_CRAWLE = True
                 break
 
-            response = self.connectionControl.request(url, 0)
+            url, url_headers, url_extra = self.handler.preProcess(queue_item)
+            response = self.connectionControl.request(url, 0, url_headers,
+                                                      url_extra)
             if response:
                 self.handler.process(response, self.rmi)
 
@@ -381,30 +342,26 @@ class ControlThread(threading.Thread):
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, RMI_URL, auth=None, numThreads=1,
-                 requestLimit=-1, doRedirect=True):
+    def __init__(self, handler, RMI_URL, numThreads=1, requestLimit=-1,
+                 doRedirect=True):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         RMI_URL -- The url to the RMI server
-        auth -- The optional Auth class (Default None)
         numThreads -- The number of threads to spwan (Default 1)
         requestLimit -- See HTTPConnectionControl
         doRedirect -- If true redirects will transparently be handled
         """
         self.threads = []
-        self.connection_ctrl = HTTPConnectionControl(auth=auth,
-                                                     handler=handler,
+        self.connection_ctrl = HTTPConnectionControl(handler=handler,
                                                      requestLimit=requestLimit,
                                                      doRedirect=doRedirect)
-        self.auth = auth
         self.handler = handler
         self.already_stopped = False
 
         for x in range(numThreads):
-            thread = ControlThread(handler=handler,
-                                   RMI_URL=RMI_URL, auth=auth,
+            thread = ControlThread(handler=handler, RMI_URL=RMI_URL,
                                    connectionControl = self.connection_ctrl)
             self.threads.append(thread)
 
@@ -435,35 +392,6 @@ class Controller(object):
         sys.stderr.flush()
         self.connection_ctrl.stop()
         self.join()
-        if self.auth:
-            self.auth.save()
-
-class BrowserAuth(Auth):
-    """A simple Auth class which sets the HTTP USER-AGENT"""
-	
-    _USER_AGENT = ' '.join(('Mozilla/5.0 (Macintosh; U; PPC Mac OS X Mach-0;',
-                            'en-US; rv:1.8.1.7) Gecko/20070914',
-                            'Firefox/2.0.0.7'))
-	
-    def __init__(self, user_agent=None):
-        """Constructs the BrowserAuth class
-
-        Keyword Arguments:
-        user_agent -- The desired user_agent string to use.
-        """
-		
-        if user_agent is None:
-            self.headers = {'USER-AGENT':self._USER_AGENT}
-        else:
-            self.headers = {'USER-AGENT':user_agent}
-
-    def getNextHeader(self,url):
-        """Return the header containing the USER-AGENT field"""
-        return self.headers
-
-    def save(self):
-        """Required, does nothing"""
-        pass
 
 
 class VisitURLHandler(Handler):

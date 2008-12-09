@@ -7,10 +7,20 @@ class PyroQueue(object, Pyro.core.ObjBase):
     implements the get and put method."""
 	
     def get(self):
+        """The get function must return three items.
+        url, headers, extra
+        where:
+             url     - a string representing the url to crawl
+             headers - a dictionary of headers to make the request with.
+                       for no headers simply return None. To specifiy to the
+                       crawler that there are no valid headers return False
+             extra   - any additional object to pass between the queue and the
+                       handler. Can be None
+        """
         raise "RemoteQueueHandler.get() needs to be implemented"
     
-    def put(self,data):
-        raise "RemoteQueueHandler.put(data) needs to be implemented"
+    def put(self, queue_item):
+        raise "RemoteQueueHandler.put(queue_item) needs to be implemented"
 
 
 class URLQueue(PyroQueue):
@@ -44,7 +54,7 @@ class URLQueue(PyroQueue):
         # Init the Pyro object
         Pyro.core.ObjBase.__init__(self)
 
-    def save(self,file):
+    def save(self, file):
         """Outputs queue to file specified. On error prints queue to screen."""
         try:
             file = open(file, 'w')
@@ -73,9 +83,9 @@ class URLQueue(PyroQueue):
             if size % 1000 is 0:
                 print "Queue Size: %d" % size
         self.lock.release()
-        return url
+        return url, None, None
 
-    def put(self,url):
+    def put(self, url):
         self.lock.acquire()
         self.queue.append(url)
         self.lock.release()

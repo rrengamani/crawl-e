@@ -33,8 +33,3 @@ must implement a process function. This function is where all the magic can
 happen. We say can happen because it's entirely up to you what to do in this
 function. Some possibilities are parsing links to add to the queue, simply
 saving the contents of the page, or both!
-
-To facilitate special needs one can extend Crawle.core.Auth. This class
-contains functions which are called before every request. It can be utilized
-to rate limit requests, handle authentication, and verify that fetched pages
-are as expected to be.
