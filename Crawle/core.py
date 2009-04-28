@@ -7,7 +7,7 @@ MAX_DEPTH = 10
 STOP_CRAWLE = False
 
 def runCrawle(argv, handler, doRedirect=True):
-    """The typical to start CRAWL-E"""
+    """The typical way to start CRAWL-E"""
     try:
         rmi_url = argv[1].strip()
         threads = int(argv[2])
@@ -33,15 +33,18 @@ class Handler(object):
 
     def preProcess(self, queue_item):
         """PreProcess is called directly before making the reqeust.
-        This function must return three values:
+        The queue_item input to this function contains three vaues:
             url     - the url to fetch
             headers - the headers to send with the url. Can be None or False.
                       None means don't add any specific headers, and False
                       indicates that the crawl should terminate.
             extra   - Anything additional information to pass along. Can be
                       None.
+
+        These values can be modified as needed, and then all need to be returned
+        as url, headers, extra
         """
-        return queue_item, None, None
+        return queue_item
     
     def process(self, info, rmi):
         """Process is called after the request has been made. It needs to be
@@ -282,6 +285,7 @@ class HTTPConnectionControl(object):
 class ControlThread(threading.Thread):
     """A single thread of control"""
 
+    EMPTY_QUEUE_RETRYS = 0
     stop_wait_event = threading.Event()
 
     def __init__(self, connectionControl, handler, RMI_URL):
@@ -306,10 +310,12 @@ class ControlThread(threading.Thread):
         server is shutdown, and when a returned url is None.
         """
 
+        retry_count = 0
         global STOP_CRAWLE
         while not STOP_CRAWLE:
             # Get the URL to retrieve
             try:
+                # Queue returns a 3-tuple
                 queue_item = self.rmi.get()
             except Pyro.protocol.ProtocolError:
                 if not STOP_CRAWLE:
@@ -317,11 +323,15 @@ class ControlThread(threading.Thread):
                     sys.stderr.flush()
                     STOP_CRAWLE = True
                 break
-			
-            if queue_item is None:
+
+            
+            if queue_item[0] is None:
                 ControlThread.stop_wait_event.clear()
                 ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
                 if ControlThread.stop_wait_event.isSet():
+                    continue
+                if retry_count < ControlThread.EMPTY_QUEUE_RETRYS:
+                    retry_count += 1
                     continue
 
                 if not STOP_CRAWLE:
@@ -330,6 +340,7 @@ class ControlThread(threading.Thread):
                     STOP_CRAWLE = True
                 break
 
+            retry_count = 0
             url, url_headers, url_extra = self.handler.preProcess(queue_item)
             response = self.connectionControl.request(url, 0, url_headers,
                                                       url_extra)
@@ -359,6 +370,8 @@ class Controller(object):
                                                      doRedirect=doRedirect)
         self.handler = handler
         self.already_stopped = False
+
+        ControlThread.EMPTY_QUEUE_RETRYS = 1
 
         for x in range(numThreads):
             thread = ControlThread(handler=handler, RMI_URL=RMI_URL,

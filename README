@@ -13,9 +13,15 @@ development of Handler modules inorder to function properly.
 
 Installation
 ---------------------
+Requirements: python >= python2.5
+              pyro ( http://pyro.sourceforge.net/ )
 Run: python setup.py install
 Note: You will probably need to be a root user to install the package.
 
+Running
+---------------------
+Check out the examples folder. The script run_it.sh should be sufficient to get
+you started.
 
 Modules
 ---------------------
