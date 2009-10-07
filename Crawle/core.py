@@ -70,6 +70,7 @@ class Handler(object):
         """
         return True
 
+
 class HTTPConnectionQueue(object):
     """This class handles the queue of sockets for a particular address.
 
@@ -142,10 +143,6 @@ class HTTPConnectionControl(object):
         self.lock = threading.Lock()
         self.handler = handler
         self.doRedirect = doRedirect
-
-    def stop(self):
-        """Used to indicate to stop processing requests"""
-        [q.closeConnections() for q in self.connectionQueues.itervalues()]
 
     def request(self, url, depth, url_headers, url_extra=None):
         """Handles the request to the server.
@@ -260,6 +257,7 @@ class HTTPConnectionControl(object):
         toReturn['url_extra'] = url_extra
         return toReturn
 
+
 class ControlThread(threading.Thread):
     """A single thread of control"""
 
@@ -328,6 +326,7 @@ class ControlThread(threading.Thread):
             # Now release waiting threads
             ControlThread.stop_wait_event.set()            
 
+
 class Controller(object):
     """The primary controller manages all the threads."""
 	
@@ -378,7 +377,6 @@ class Controller(object):
         STOP_CRAWLE = True
         sys.stderr.write("Stop received\n")
         sys.stderr.flush()
-        self.connection_ctrl.stop()
         self.join()
 
 
@@ -392,7 +390,7 @@ class VisitURLHandler(Handler):
         if info['status'] != 200:
             print "putting %s back on queue" % info['url']
             rmi.put(info['url'])
-	
+
 
 if __name__ == '__main__':
     """Basic example of how to start CRAWL-E. The assumption is that
