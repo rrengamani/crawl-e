@@ -1,4 +1,4 @@
-import httplib, socket, sys, threading, urlparse
+import httplib, socket, sys, threading, urlparse, Queue
 import Pyro.core, Pyro.protocol
 
 CONNECTION_TIMEOUT = 30
@@ -72,9 +72,13 @@ class Handler(object):
 
 class HTTPConnectionQueue(object):
     """This class handles the queue of sockets for a particular address.
-    
-    Expand on this.
+
+    This essentially is a queue of socket objects which also adds a transparent
+    field to each connection object which is the requestCount. When the
+    requestCount exceeds the REQUEST_LIMIT the connection is automatically
+    reset.
     """
+    REQUEST_LIMIT = None
 
     def __init__(self, address):
         """Constructs a HTTPConnectionQueue object.
@@ -83,17 +87,7 @@ class HTTPConnectionQueue(object):
         address -- The address for which this object maps to.
         """
         self.address = address
-        self.lock = threading.Lock()
-        self.queue = []
-        self.size = 0
-
-    def closeConnections(self):
-        self.lock.acquire()
-        sys.stderr.write("Closing %d connections\n" % len(self.queue))
-        sys.stderr.flush()
-        for connection in self.queue:
-            connection.close()
-        self.lock.release()
+        self.queue = Queue.Queue(0)
 
     def getConnection(self):
         """Return a HTTPConnection object for the appropriate address.
@@ -103,28 +97,25 @@ class HTTPConnectionQueue(object):
 
         Dynamically add new field to HTTPConnection called requestCount to
         keep track of the number of requests made with the specific connection.
-        """            
-        self.lock.acquire()
-        if self.size is 0:
-            self.lock.release()
-            new = httplib.HTTPConnection(*self.address)
-            new.requestCount = 1
-            return new
-        connection = self.queue.pop(0)
-        self.size -= 1
-        self.lock.release()
+        """
+        try:
+            connection = self.queue.get(block=False)
+            """Reset the connection if exceeds request limit"""
+            if self.REQUEST_LIMIT and \
+                    connection.requestCount >= self.REQUEST_LIMIT:
+                connection.close()
+                connection = httplib.HTTPConnection(*self.address)
+                connection.requestCount = 0
+        except Queue.Empty:
+            connection = httplib.HTTPConnection(*self.address)
+            connection.requestCount = 0
+        
         return connection
 
-    def putSocket(self, connection):
-        if STOP_CRAWLE:
-            connection.close()
-            return
-        """Put the HTTPConenction object back on the queue."""            
-        self.lock.acquire()
-        self.size += 1
+    def putConnection(self, connection):
+        """Put the HTTPConnection object back on the queue."""
         connection.requestCount += 1
-        self.queue.append(connection)
-        self.lock.release()
+        self.queue.put(connection)
 
 
 class HTTPConnectionControl(object):
@@ -135,15 +126,12 @@ class HTTPConnectionControl(object):
     
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, requestLimit=-1, doRedirect=True):
+    def __init__(self, handler, doRedirect=True):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
         Keyword Arguments:
         handler -- The Handler class for checking if a url is valid.
-        requestLimit -- The maximum number of requests a HTTP session can make.
-                        When reached, the connection is closed and a new
-                        connection is established in its place (Default -1).
         doRedirect -- If true, the redirected URL will automatically be placed
                       back on the queue. Otherwise the Handler process
                       function will have to handle a return with a HTTP
@@ -153,14 +141,7 @@ class HTTPConnectionControl(object):
         self.connectionQueues = {}
         self.lock = threading.Lock()
         self.handler = handler
-        self.requestLimit = requestLimit
         self.doRedirect = doRedirect
-
-    def __resetConnection(self, connection, address):
-        """Restart the connection."""
-        connection.close()
-        connection = httplib.HTTPConnection(address)
-        connection.requestCount = 1
 
     def stop(self):
         """Used to indicate to stop processing requests"""
@@ -212,9 +193,6 @@ class HTTPConnectionControl(object):
         self.lock.release()
         connection = connectionQueue.getConnection()
             
-        if connection.requestCount is self.requestLimit:
-            self.__resetConnection(connection, address)
-
         if url_headers is False:
             return {'status':-5, 'headers':'', 'body':'', 'url':url,
                     'final_url':url, 'url_headers':url_headers,
@@ -235,7 +213,7 @@ class HTTPConnectionControl(object):
             connection.request('GET', request, '', headers)
             response = connection.getresponse()
             body = response.read()
-            connectionQueue.putSocket(connection)
+            connectionQueue.putConnection(connection)
         except httplib.ResponseNotReady:
             sys.stderr.write(' '.join(('A previous request did not call'
                                        'read(). This shouldn\'t happen\n')))
@@ -353,20 +331,17 @@ class ControlThread(threading.Thread):
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, RMI_URL, numThreads=1, requestLimit=-1,
-                 doRedirect=True):
+    def __init__(self, handler, RMI_URL, numThreads=1, doRedirect=True):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         RMI_URL -- The url to the RMI server
         numThreads -- The number of threads to spwan (Default 1)
-        requestLimit -- See HTTPConnectionControl
         doRedirect -- If true redirects will transparently be handled
         """
         self.threads = []
         self.connection_ctrl = HTTPConnectionControl(handler=handler,
-                                                     requestLimit=requestLimit,
                                                      doRedirect=doRedirect)
         self.handler = handler
         self.already_stopped = False
