@@ -1,11 +1,9 @@
-import sys, threading
-import Pyro.core
+import sys, threading, Queue
 
-class PyroQueue(object, Pyro.core.ObjBase):
-    """PyroQueue is an abstract class in the sense that it needs to be
-    subclassed where the subclass calls Pyro.core.ObjBase.__init__(self) and
-    implements the get and put method."""
-	
+class CrawlQueue(object):
+    """CrawlQueue is an abstract class in the sense that it needs to be
+    subclassed with its get and put methods defined."""
+
     def get(self):
         """The get function must return three items.
         url, headers, extra
@@ -17,24 +15,22 @@ class PyroQueue(object, Pyro.core.ObjBase):
              extra   - any additional object to pass between the queue and the
                        handler. Can be None
         """
-        raise "RemoteQueueHandler.get() needs to be implemented"
+        raise "CrawlQueue.get() needs to be implemented"
     
     def put(self, queue_item):
-        raise "RemoteQueueHandler.put(queue_item) needs to be implemented"
+        raise "CrawlQueue.put(queue_item) needs to be implemented"
 
-
-class URLQueue(PyroQueue):
+class URLQueue(CrawlQueue):
     """URLQueue is the most basic queue type and is all that is needed for
     most situations. Simply, it queues full urls."""
 	
     def __init__(self, seedfile=None):
-        """Sets up the URLQueue by creating a queue and lock for the queue.
+        """Sets up the URLQueue by creating a queue.
         
         Keyword arguments:
         seedfile -- file containing urls to seed the queue (default None)
         """
-        self.queue = []
-        self.lock = threading.Lock()
+        self.queue = Queue.Queue(0)
 
         # Add seeded items to the queue
         if seedfile:
@@ -51,9 +47,6 @@ class URLQueue(PyroQueue):
         else:
             print "Starting with empty queue"
 
-        # Init the Pyro object
-        Pyro.core.ObjBase.__init__(self)
-
     def save(self, file):
         """Outputs queue to file specified. On error prints queue to screen."""
         try:
@@ -64,31 +57,33 @@ class URLQueue(PyroQueue):
             sys.stderr.flush()
             file = sys.stdout
 
-        for item in self.queue:
-            file.write(item+"\n")
+        items = 0
+        while not self.queue.empty():
+            try:
+                item = self.queue.get(block=False)
+                file.write("%s\n" % item)
+                items += 1
+            except Queue.empty:
+                print "Saving the queue is not atomic, FIXY TIME"
+
         if file != sys.stdout:
             file.close()
 
-        print "Saved %d items." % len(self.queue)
+        print "Saved %d items." % items
 
     def get(self):
         """Return url at the head of the queue or None if empty"""
-        self.lock.acquire()
-        size = len(self.queue)
-        if size is 0:
-            print "Queue empty"
-            url = None
-        else:
-            url = self.queue.pop(0)
-            if size % 1000 is 0:
-                print "Queue Size: %d" % size
-        self.lock.release()
-        return url, None, None
+        size = self.queue.qsize()
+        if size == 0: print "Queue empty"
+        elif size % 1000 == 0: print "Queue Size: %d" % size
+
+        try:
+            return self.queue.get(block=True, timeout=30), None, None
+        except Queue.empty:
+            return url, None, None
 
     def put(self, url):
-        self.lock.acquire()
-        self.queue.append(url)
-        self.lock.release()
+        self.queue.put(url)
 
 
 if __name__ == '__main__':
@@ -96,12 +91,6 @@ if __name__ == '__main__':
         
     It takes an optional seedfile argument which when used is also used as the
     file to dump output to on close.
-
-    If writing a different PyroQueue subclass one must call:
-        Pyro.core.initServer
-        daemon.connect
-        daemon.requestLoop
-    See the Pyro documentation on the proper usage for these functions.
     """
 	
     try:
@@ -110,13 +99,5 @@ if __name__ == '__main__':
         seedfile = None
 
     queueHandler = URLQueue(seedfile)
-    Pyro.core.initServer()
-    daemon=Pyro.core.Daemon()
-    uri=daemon.connect(queueHandler, "URLQueue")
-
-    print "PYROLOC://%s:%d/URLQueue" % (daemon.hostname, daemon.port)
-
-    try:
-        daemon.requestLoop()
-    except:
-        queueHandler.save(seedfile)
+    while sys.stdin.read(): pass
+    queueHandler.save(seedfile)

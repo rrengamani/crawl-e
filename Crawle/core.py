@@ -1,5 +1,5 @@
 import httplib, socket, sys, threading, urlparse, Queue
-import Pyro.core, Pyro.protocol
+import queue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -9,14 +9,13 @@ STOP_CRAWLE = False
 def runCrawle(argv, handler, doRedirect=True):
     """The typical way to start CRAWL-E"""
     try:
-        rmi_url = argv[1].strip()
-        threads = int(argv[2])
+        threads = int(argv[1])
     except:
-        sys.stderr.write("Usage: %s rmi_url threads\n" % argv[0])
+        sys.stderr.write("Usage: %s threads\n" % argv[0])
         sys.exit(1)
 
-    controller = Controller(handler=handler, RMI_URL=rmi_url,
-                            numThreads=threads, doRedirect=doRedirect)
+    controller = Controller(handler=handler, queue=queue, numThreads=threads,
+                            doRedirect=doRedirect)
     controller.start()
     try:
         controller.join()
@@ -46,7 +45,7 @@ class Handler(object):
         """
         return queue_item
     
-    def process(self, info, rmi):
+    def process(self, info, queue):
         """Process is called after the request has been made. It needs to be
         implemented by a subclass.
 
@@ -59,7 +58,7 @@ class Handler(object):
                     final_url -- the final url after redirects
                     url_headers -- the HTTP request headers
                     url_extra -- Extra user provided information
-        rmi -- the PythonRMI object.
+        queue -- the handler to the queue class
         """
         raise NotImplementedError(' '.join(('Handler.process must be defined',
                                             'in a subclass')))
@@ -82,7 +81,7 @@ class HTTPConnectionQueue(object):
     REQUEST_LIMIT = None
 
     def __init__(self, address):
-        """Constructs a HTTPConnectionQueue object.
+        """Constructs a HTTPConnectionQueueobject.
 
         Keyword Arguments:
         address -- The address for which this object maps to.
@@ -264,26 +263,25 @@ class ControlThread(threading.Thread):
     EMPTY_QUEUE_RETRYS = 0
     stop_wait_event = threading.Event()
 
-    def __init__(self, connectionControl, handler, RMI_URL):
+    def __init__(self, connectionControl, handler, queue):
         """Sets up the ControlThread.
 
         Keyword Arguments:
         connectionControl -- A HTTPConnectionControl object. This object is
                              shared amongst the threads
         handler -- The handler class for parsing the returned information
-        RMI_URL -- The RMI initilization URL. Each thread needs to connect
-                   separately to the RMI server.
+        queue	-- The handle to the queue class which implements get and put.
         """
         threading.Thread.__init__(self)
         self.connectionControl = connectionControl
         self.handler = handler;
-        self.rmi = Pyro.core.getProxyForURI(RMI_URL)
+        self.queue = queue
 
     def run(self):
         """This is the execution order of a single thread.
         
-        The threads will stop when STOP_CRAWLE becomes true, when the RMI
-        server is shutdown, and when a returned url is None.
+        The threads will stop when STOP_CRAWLE becomes true, when the queue
+        raises an exception, or when a returned url is None.
         """
 
         retry_count = 0
@@ -292,10 +290,10 @@ class ControlThread(threading.Thread):
             # Get the URL to retrieve
             try:
                 # Queue returns a 3-tuple
-                queue_item = self.rmi.get()
-            except Pyro.protocol.ProtocolError:
+                queue_item = self.queue.get()
+            except:
                 if not STOP_CRAWLE:
-                    sys.stderr.write("Queue unreachable - stopping CRAWL-E\n")
+                    sys.stderr.write("Queue error - stopping CRAWL-E\n")
                     sys.stderr.flush()
                     STOP_CRAWLE = True
                 break
@@ -321,7 +319,7 @@ class ControlThread(threading.Thread):
             response = self.connectionControl.request(url, 0, url_headers,
                                                       url_extra)
             if response:
-                self.handler.process(response, self.rmi)
+                self.handler.process(response, self.queue)
 
             # Now release waiting threads
             ControlThread.stop_wait_event.set()            
@@ -330,12 +328,12 @@ class ControlThread(threading.Thread):
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, RMI_URL, numThreads=1, doRedirect=True):
+    def __init__(self, handler, queue, numThreads=1, doRedirect=True):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
-        RMI_URL -- The url to the RMI server
+        queue -- The handle the the queue class
         numThreads -- The number of threads to spwan (Default 1)
         doRedirect -- If true redirects will transparently be handled
         """
@@ -348,8 +346,8 @@ class Controller(object):
         ControlThread.EMPTY_QUEUE_RETRYS = 1
 
         for x in range(numThreads):
-            thread = ControlThread(handler=handler, RMI_URL=RMI_URL,
-                                   connectionControl = self.connection_ctrl)
+            thread = ControlThread(handler=handler, queue=queue,
+                                   connectionControl=self.connection_ctrl)
             self.threads.append(thread)
 
     def start(self):
@@ -386,10 +384,10 @@ class VisitURLHandler(Handler):
     This handler just demonstrates how to interact with the queue.
     """
 
-    def process(self, info, rmi):
+    def process(self, info, queue):
         if info['status'] != 200:
             print "putting %s back on queue" % info['url']
-            rmi.put(info['url'])
+            queue.put(info['url'])
 
 
 if __name__ == '__main__':

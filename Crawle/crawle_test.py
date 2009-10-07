@@ -5,39 +5,37 @@ import socket, unittest
 
 class TestHTTPConnectionQueue(unittest.TestCase):
     def setUp(self):
-        self.address = (socket.gethostbyname('127.0.0.1'), 80)
+        address = (socket.gethostbyname('127.0.0.1'), 80)
+        self.cq = core.HTTPConnectionQueue(address)
 
     def testQueueLength(self):
-        connection_queue = core.HTTPConnectionQueue(self.address)
-        temp = connection_queue.getConnection()
+        temp = self.cq.getConnection()
         for i in range(5):
-            self.assertEqual(connection_queue.queue.qsize(), i)
-            connection_queue.putConnection(temp)
+            self.assertEqual(self.cq.queue.qsize(), i)
+            self.cq.putConnection(temp)
 
     def testResetConnection(self):
-        prev = core.HTTPConnectionQueue.REQUEST_LIMIT = 2
-        connection_queue = core.HTTPConnectionQueue(self.address)
-        a = connection_queue.getConnection()
-        connection_queue.putConnection(a)
-        b = connection_queue.getConnection()
-        self.assertEqual(a, b)
-        connection_queue.putConnection(a)
-        b = connection_queue.getConnection()
-        self.assertNotEqual(a, b)
-        core.HTTPConnectionQueue.REQUEST_LIMIT = prev
+        prev = core.HTTPConnectionQueue.REQUEST_LIMIT
+        try:
+            core.HTTPConnectionQueue.REQUEST_LIMIT = 2
+            a = self.cq.getConnection()
+            self.cq.putConnection(a)
+            self.assertEqual(self.cq.getConnection(), a)
+            self.cq.putConnection(a)
+            self.assertNotEqual(self.cq.getConnection(), a)
+        finally:
+            core.HTTPConnectionQueue.REQUEST_LIMIT = prev
 
     def testGetConnectionCount(self):
-        connection_queue = core.HTTPConnectionQueue(self.address)
         for i in range(5):
-            conn = connection_queue.getConnection()
+            conn = self.cq.getConnection()
             self.assertEqual(conn.requestCount, 0)
 
     def testGetConnectionCountReplace(self):
-        connection_queue = core.HTTPConnectionQueue(self.address)
         for i in range(5):
-            conn = connection_queue.getConnection()
+            conn = self.cq.getConnection()
             self.assertEqual(conn.requestCount, i)
-            connection_queue.putConnection(conn)
+            self.cq.putConnection(conn)
 
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
