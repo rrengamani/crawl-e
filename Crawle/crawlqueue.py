@@ -40,7 +40,7 @@ class URLQueue(CrawlQueue):
                 raise "Could not open seed file"
             count = 0
             for line in file:
-                self.queue.append(line.strip())
+                self.queue.put(line.strip())
                 count += 1
             file.close()
             print "Queued:", count
@@ -63,7 +63,7 @@ class URLQueue(CrawlQueue):
                 item = self.queue.get(block=False)
                 file.write("%s\n" % item)
                 items += 1
-            except Queue.empty:
+            except Queue.Empty:
                 print "Saving the queue is not atomic, FIXY TIME"
 
         if file != sys.stdout:
@@ -78,26 +78,9 @@ class URLQueue(CrawlQueue):
         elif size % 1000 == 0: print "Queue Size: %d" % size
 
         try:
-            return self.queue.get(block=True, timeout=30), None, None
-        except Queue.empty:
-            return url, None, None
+            return self.queue.get(block=True, timeout=5), None, None
+        except Queue.Empty:
+            return None, None, None
 
     def put(self, url):
         self.queue.put(url)
-
-
-if __name__ == '__main__':
-    """This script runs the URLQueue.
-        
-    It takes an optional seedfile argument which when used is also used as the
-    file to dump output to on close.
-    """
-	
-    try:
-        seedfile = sys.argv[1]
-    except:
-        seedfile = None
-
-    queueHandler = URLQueue(seedfile)
-    while sys.stdin.read(): pass
-    queueHandler.save(seedfile)

@@ -1,5 +1,5 @@
 import httplib, socket, sys, threading, urlparse, Queue
-import queue
+import crawlqueue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -11,16 +11,27 @@ def runCrawle(argv, handler, doRedirect=True):
     try:
         threads = int(argv[1])
     except:
-        sys.stderr.write("Usage: %s threads\n" % argv[0])
+        sys.stderr.write("Usage: %s threads [seedfile]\n" % argv[0])
         sys.exit(1)
 
-    controller = Controller(handler=handler, queue=queue, numThreads=threads,
-                            doRedirect=doRedirect)
+    try:
+        seedfile = argv[2]
+    except:
+        seedfile = None
+
+    queueHandler = crawlqueue.URLQueue(seedfile)
+
+
+    controller = Controller(handler=handler, queue=queueHandler,
+                            numThreads=threads, doRedirect=doRedirect)
     controller.start()
     try:
         controller.join()
     except KeyboardInterrupt:
         controller.stop()
+    queueHandler.save(seedfile)
+
+
 
 
 class Handler(object):
@@ -298,7 +309,6 @@ class ControlThread(threading.Thread):
                     STOP_CRAWLE = True
                 break
 
-            
             if queue_item[0] is None:
                 ControlThread.stop_wait_event.clear()
                 ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)

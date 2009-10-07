@@ -14,7 +14,6 @@ development of Handler modules inorder to function properly.
 Installation
 ---------------------
 Requirements: python >= python2.5
-              pyro ( http://pyro.sourceforge.net/ )
 Run: python setup.py install
 Note: You will probably need to be a root user to install the package.
 
@@ -28,10 +27,8 @@ Modules
 CRAWL-E contains two files: core.py and queue.py
     core.py  - This file contains all the core infrastructure to CRAWL-E, which
     	       is explained below.
-    queue.py - This file contains the infrastructure to the locking queue which
-	       utilizes the Pyro library. This class along with Pyro enables
-	       CRAWL-E to easily handle get and put requests to the queue from
-	       any number of machines.
+    crawlqueue.py - This file contains the infrastructure to the locking queue.
+
 
 
 The heart of CRAWL-E relies on extending the Crawle.core.Handler, in which one
