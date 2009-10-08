@@ -1,4 +1,4 @@
-import httplib, socket, sys, threading, urlparse, Queue
+import httplib, socket, sys, threading, time, urllib, urlparse, Queue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -38,18 +38,21 @@ class RequestResponse(object):
     Attributes:
     	redirects	- None if request should not redirect, otherwise a
 			  number > 0 to indicate how many redirects to support.
-
     """
 
-    def __init__(self, url, headers=None, maxRedirects=10):
+    def __init__(self, url, headers=None, method='GET', params=None,
+                 redirects=10):
         self.requestHeaders = headers
         self.requestURL = url
-        self.redirects = maxRedirects
+        self.requestMethod = method
+        self.requestParams = params
+        self.redirects = redirects
 
         self.responseStatus = None
         self.responseURL = url
         self.responseHeaders = None
         self.responseBody = None
+        self.responseTime = None
 
         self.errorMsg = None
         self.errorObject = None
@@ -165,9 +168,15 @@ class HTTPConnectionControl(object):
         connection = connectionQueue.getConnection()
             
         try:
-            connection.request('GET', request, '', headers)
+            start = time.time()
+            if reqRes.requestParams:
+                data = urllib.urlencode(reqRes.requestParams)
+            else:
+                data = ''
+            connection.request(reqRes.requestMethod, request, data, headers)
             response = connection.getresponse()
-            body = response.read()
+            responseTime = time.time() - start
+            responseBody = response.read()
             connectionQueue.putConnection(connection)
         except httplib.ResponseNotReady:
             sys.stderr.write(' '.join(('A previous request did not call'
@@ -187,6 +196,7 @@ class HTTPConnectionControl(object):
             return
         except Exception, e:
             sys.stderr.write('Unhandled exception -- FIXY TIME\n')
+            sys.stderr.write("%s: %s\n" % (str(type(e)), e.__str__()))
             sys.stderr.flush()
             connection.close()
             reqRes.errorMsg = 'Unhandled exception'
@@ -205,9 +215,10 @@ class HTTPConnectionControl(object):
             self.request(reqRes)
             return
 
+        reqRes.responseTime = responseTime
         reqRes.responseStatus = response.status
         reqRes.responseHeaders = dict(response.getheaders())
-        reqRes.responseBody = body
+        reqRes.responseBody = responseBody
 
 
 class ControlThread(threading.Thread):
@@ -291,7 +302,9 @@ class Controller(object):
         self.threads = []
         self.connectionCtrl = HTTPConnectionControl(handler=handler)
         self.handler = handler
-        self.alreadyStopped = False
+        # HACK AROUND THIS FOR NOW
+        global STOP_CRAWLE
+        STOP_CRAWLE = False
 
         ControlThread.EMPTY_QUEUE_RETRYS = 1
 
@@ -326,6 +339,9 @@ class Controller(object):
         sys.stderr.write("Stop received\n")
         sys.stderr.flush()
         self.join()
+
+    def crawl_finished(self):
+        return STOP_CRAWLE
 
 
 class VisitURLHandler(Handler):

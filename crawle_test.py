@@ -55,6 +55,11 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.cc.request(rr)
         self.assertEqual('Aborted in preProcess', rr.errorMsg)
 
+    def testRequestInvalidMethod(self):
+        rr = crawle.RequestResponse('http://www.google.com', method='INVALID')
+        self.cc.request(rr)
+        self.assertEqual(400, rr.responseStatus)
+
     def testRequestInvalidHostname(self):
         rr = crawle.RequestResponse('http://invalid')
         self.cc.request(rr)
@@ -70,29 +75,40 @@ class TestHTTPConnectionControl(unittest.TestCase):
             self.assertEqual('Invalid URL', rr.errorMsg)
 
     def testRequest301(self):
-        rr = crawle.RequestResponse('http://google.com', maxRedirects=None)
+        rr = crawle.RequestResponse('http://google.com', redirects=None)
         self.cc.request(rr)
         self.assertEqual(301, rr.responseStatus)
         self.assertEqual('http://www.google.com/',
                          rr.responseHeaders['location'])
 
     def testRequestRedirectExceeded(self):
-        rr = crawle.RequestResponse('http://google.com', maxRedirects=0)
+        rr = crawle.RequestResponse('http://google.com', redirects=0)
         self.cc.request(rr)
         self.assertEqual('Redirect count exceeded', rr.errorMsg)
 
     def testRequestSuccessfulRedirect(self):
-        rr = crawle.RequestResponse('http://google.com', maxRedirects=1)
+        rr = crawle.RequestResponse('http://google.com', redirects=1)
         self.cc.request(rr)
         self.assertEqual(200, rr.responseStatus)
         self.assertEqual(0, rr.redirects)
 
     def testRequest200(self):
-        rr = crawle.RequestResponse('http://www.google.com', maxRedirects=1)
+        rr = crawle.RequestResponse('http://www.google.com', redirects=1)
         self.cc.request(rr)
         self.assertEqual(200, rr.responseStatus)
         self.assertEqual(1, rr.redirects)
+        self.assertTrue(rr.responseTime > 0)
 
+    def testRequestPost(self):
+        rr = crawle.RequestResponse(
+            'http://www.snee.com/xml/crud/posttest.cgi', method='POST',
+            params={'fname':'CRAWL-E', 'lname':'POST_TEST'})
+        self.cc.request(rr)
+        self.assertEqual(200, rr.responseStatus)
+        self.assertTrue(rr.responseTime > 0)
+        self.assertTrue(''.join(['<p>First name: "CRAWL-E"</p>',
+                                 '<p>Last name: "POST_TEST"</p>'])
+                        in rr.responseBody)
 
 ###
 # HELPER CLASSES
