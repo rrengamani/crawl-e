@@ -4,31 +4,6 @@ CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
 STOP_CRAWLE = False
 
-def runCrawle(argv, handler):
-    """The typical way to start CRAWL-E"""
-    try:
-        threads = int(argv[1])
-    except:
-        sys.stderr.write("Usage: %s threads [seedfile]\n" % argv[0])
-        sys.exit(1)
-
-    try:
-        seedfile = argv[2]
-    except:
-        seedfile = None
-
-    queueHandler = URLQueue(seedfile)
-
-
-    controller = Controller(handler=handler, queue=queueHandler,
-                            numThreads=threads)
-    controller.start()
-    try:
-        controller.join()
-    except KeyboardInterrupt:
-        controller.stop()
-    queueHandler.save(seedfile)
-
 class Handler(object):
     """An _abstract_ class for handling what urls to retrieve and how to
     parse and save them. The functions of this class need to be designed in
@@ -37,9 +12,13 @@ class Handler(object):
     """
 
     def preProcess(self, requestResponse):
-        """PreProcess is called directly before making the reqeust.
+        """PreProcess is called directly before making the reqeust. Any of the
+        request parameters can be modified here.
+
+        Setting the responseURL to None will cause the request to be dropped.
+        This is useful for testing if a redirect link should be followed.
         """
-        return requestResponse
+        return
     
     def process(self, requestResponse, queue):
         """Process is called after the request has been made. It needs to be
@@ -148,7 +127,12 @@ class HTTPConnectionControl(object):
         """Handles the request to the server.
         """
         if STOP_CRAWLE:
-            requestReponse.errorMsg = 'Stopped'
+            reqRes.errorMsg = 'CRAWL-E Stopped'
+            return
+
+        self.handler.preProcess(reqRes)
+        if not reqRes.responseURL:
+            reqRes.errorMsg = 'Aborted in preProcess'
             return
 
         u = urlparse.urlparse(reqRes.responseURL)
@@ -215,7 +199,6 @@ class HTTPConnectionControl(object):
 
         # Handle redirect
         if response.status in (301, 302, 303) and reqRes.redirects:
-            print 'Redirecting'
             if reqRes.redirects <= 0:
                 reqRes.errorMsg = 'Redirect count exceeded'
                 return
@@ -291,7 +274,6 @@ class ControlThread(threading.Thread):
                 break
 
             retryCount = 0
-            requestResponse = self.handler.preProcess(requestResponse)
             self.connectionControl.request(requestResponse)
             self.handler.process(requestResponse, self.queue)
 
@@ -438,6 +420,31 @@ class URLQueue(CrawlQueue):
 
     def put(self, url):
         self.queue.put(url)
+
+
+def runCrawle(argv, handler):
+    """The typical way to start CRAWL-E"""
+    try:
+        threads = int(argv[1])
+    except:
+        sys.stderr.write("Usage: %s threads [seedfile]\n" % argv[0])
+        sys.exit(1)
+
+    try:
+        seedfile = argv[2]
+    except:
+        seedfile = None
+
+    queueHandler = URLQueue(seedfile)
+
+    controller = Controller(handler=handler, queue=queueHandler,
+                            numThreads=threads)
+    controller.start()
+    try:
+        controller.join()
+    except KeyboardInterrupt:
+        controller.stop()
+    queueHandler.save(seedfile)
 
 
 if __name__ == '__main__':

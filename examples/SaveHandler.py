@@ -16,6 +16,10 @@ class SaveURLHandler(crawle.Handler):
 	self.exit = False
 
     def process(self, reqRes, queue):
+        if not reqRes.responseStatus:
+            print reqRes.errorMsg
+            return
+
         if reqRes.responseStatus != 200:
             print "%d - putting %s back on queue" % (reqRes.responseStatus,
                                                      reqRes.responseURL)
