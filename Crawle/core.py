@@ -3,10 +3,9 @@ import crawlqueue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
-MAX_DEPTH = 10
 STOP_CRAWLE = False
 
-def runCrawle(argv, handler, doRedirect=True):
+def runCrawle(argv, handler):
     """The typical way to start CRAWL-E"""
     try:
         threads = int(argv[1])
@@ -23,16 +22,13 @@ def runCrawle(argv, handler, doRedirect=True):
 
 
     controller = Controller(handler=handler, queue=queueHandler,
-                            numThreads=threads, doRedirect=doRedirect)
+                            numThreads=threads)
     controller.start()
     try:
         controller.join()
     except KeyboardInterrupt:
         controller.stop()
     queueHandler.save(seedfile)
-
-
-
 
 class Handler(object):
     """An _abstract_ class for handling what urls to retrieve and how to
@@ -41,44 +37,44 @@ class Handler(object):
     access to the same instance.
     """
 
-    def preProcess(self, queue_item):
+    def preProcess(self, requestResponse):
         """PreProcess is called directly before making the reqeust.
-        The queue_item input to this function contains three vaues:
-            url     - the url to fetch
-            headers - the headers to send with the url. Can be None or False.
-                      None means don't add any specific headers, and False
-                      indicates that the crawl should terminate.
-            extra   - Anything additional information to pass along. Can be
-                      None.
-
-        These values can be modified as needed, and then all need to be returned
-        as url, headers, extra
         """
-        return queue_item
+        return requestResponse
     
-    def process(self, info, queue):
+    def process(self, requestResponse, queue):
         """Process is called after the request has been made. It needs to be
         implemented by a subclass.
 
         Keyword Arguments:
-        info -- a dictionary containing:
-                    status -- the returned HTTP status
-                    headers -- the HTTP response headers
-                    body -- the page content
-                    url -- the initial requested url
-                    final_url -- the final url after redirects
-                    url_headers -- the HTTP request headers
-                    url_extra -- Extra user provided information
+        requestResponse -- the request response object
         queue -- the handler to the queue class
         """
         raise NotImplementedError(' '.join(('Handler.process must be defined',
                                             'in a subclass')))
 
-    def isValidURL(self, url):
-        """This function is called before processing a redirect. Implementing
-        this function in a subclass can greatly improve performace.
-        """
-        return True
+class RequestResponse(object):
+    """This class is a container for information pertaining to requests and
+    responses.
+
+    Attributes:
+    	redirects	- None if request should not redirect, otherwise a
+			  number > 0 to indicate how many redirects to support.
+
+    """
+
+    def __init__(self, url, headers=None, maxRedirects=10):
+        self.requestHeaders = headers
+        self.requestURL = url
+        self.redirects = maxRedirects
+
+        self.responseStatus = None
+        self.responseURL = url
+        self.responseHeaders = None
+        self.responseBody = None
+
+        self.errorMsg = None
+        self.errorObject = None
 
 
 class HTTPConnectionQueue(object):
@@ -137,59 +133,34 @@ class HTTPConnectionControl(object):
     
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, doRedirect=True):
+    def __init__(self, handler):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
         Keyword Arguments:
         handler -- The Handler class for checking if a url is valid.
-        doRedirect -- If true, the redirected URL will automatically be placed
-                      back on the queue. Otherwise the Handler process
-                      function will have to handle a return with a HTTP
-                      redirect status.
         """
         
         self.connectionQueues = {}
         self.lock = threading.Lock()
         self.handler = handler
-        self.doRedirect = doRedirect
 
-    def request(self, url, depth, url_headers, url_extra=None):
+    def request(self, reqRes):
         """Handles the request to the server.
-
-        On success, return a dictionary containing:
-        status, headers, body, url, final_url, url_headers, url_extra
-        as described in handler	process.
-
-        On failure the status values are negative and mean the following:
-            -1.0 -- Response not ready
-            -1.1 -- Bad status line
-            -1.2 -- Socket error
-            -1.3 -- Unhandled exception
-            -2   -- Stop has been called
-            -3   -- Redirect depth has been exceeded
-            -4   -- Unsupported scheme (only HTTP currently supported)
-            -5   -- Queue indicated no valid headers
-            -6   -- gethostbyname failed
         """
         if STOP_CRAWLE:
-            return {'status':-2, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
-        if depth > MAX_DEPTH:
-            return {'status':-3, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                     'url_extra':url_extra}
+            requestReponse.errorMsg = 'Stopped'
+            return
 
-        u = urlparse.urlparse(url)
+        u = urlparse.urlparse(reqRes.responseURL)
         request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
 
         try:
             address = (socket.gethostbyname(u.hostname), u.port)
-        except socket.error:
-            return {'status':-6, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
+        except socket.error, e:
+            reqRes.errorMsg = 'Socket Error'
+            reqRes.errorObject = e
+            return
 
         self.lock.acquire()
         try:
@@ -200,21 +171,19 @@ class HTTPConnectionControl(object):
         self.lock.release()
         connection = connectionQueue.getConnection()
             
-        if url_headers is False:
-            return {'status':-5, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
-        elif url_headers:
-            headers = url_headers
+        if reqRes.requestHeaders is False:
+            reqRes.errorMsg = 'Request terminated by queue'
+            return
+        elif reqRes.requestHeaders:
+            headers = reqRes.requestHeaders
         else:
             headers = {}
         headers['Host'] = u.hostname
 
         # This should be deleted at somepoint when https is handled
         if u.scheme != 'http':
-            return {'status':-4, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
+            reqRes.errorMsg = 'Unsupported scheme'
+            return
 
         try:
             connection.request('GET', request, '', headers)
@@ -226,53 +195,48 @@ class HTTPConnectionControl(object):
                                        'read(). This shouldn\'t happen\n')))
             sys.stderr.flush()
             connection.close()
-            return {'status':-1.0, 'headers':'', 'body':'', 'url':url, 
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
+            reqRes.errorMsg = 'Response not ready'
+            return
         except httplib.BadStatusLine:
             connection.close()
-            return {'status':-1.1, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
+            reqRes.errorMsg = 'Bad status line'
+            return
         except socket.error, e:
             connection.close()
-            return {'status':-1.2, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'extra':e , 'url_headers':url_headers,
-                    'url_extra':url_extra}
-        except:
+            reqRes.errorMsg = 'Socket error'
+            reqRes.errorObject = e
+            return
+        except Exception, e:
             sys.stderr.write('Unhandled exception -- FIXY TIME\n')
             sys.stderr.flush()
             connection.close()
-            return {'status':-1.3, 'headers':'', 'body':'', 'url':url,
-                    'final_url':url, 'url_headers':url_headers,
-                    'url_extra':url_extra}
+            reqRes.errorMsg = 'Unhandled exception'
+            reqRes.errorObject = e
+            return
 
-        # Handle redirecting by first verifying the URL
-        # and then making the request. Return the response.
-        if self.doRedirect and response.status in (301,302):
-            url1 = urlparse.urljoin(url, response.getheader('Location'))
-            retryReturn = self.request(url1, depth + 1, url_headers, url_extra)
-            if retryReturn == None:
-                return None
-            retryReturn['url'] = url
-            return retryReturn
+        # Handle redirect
+        if response.status in (301, 302, 303) and reqRes.redirects:
+            print 'Redirecting'
+            if reqRes.redirects <= 0:
+                reqRes.errorMsg = 'Redirect count exceeded'
+                return
+            reqRes.redirects -= 1
+            redirectURL = response.getheader('Location')
+            reqRes.responseURL = urlparse.urljoin(reqRes.responseURL,
+                                                  redirectURL)
+            redirect = self.request(reqRes)
+            return
 
-        toReturn = {}
-        toReturn['status'] = response.status
-        toReturn['headers'] = dict(response.getheaders())
-        toReturn['body'] = body
-        toReturn['url'] = url
-        toReturn['final_url'] = url
-        toReturn['url_headers'] = url_headers
-        toReturn['url_extra'] = url_extra
-        return toReturn
+        reqRes.responseStatus = response.status
+        reqRes.responseHeaders = dict(response.getheaders())
+        reqRes.responseBody = body
 
 
 class ControlThread(threading.Thread):
     """A single thread of control"""
 
     EMPTY_QUEUE_RETRYS = 0
-    stop_wait_event = threading.Event()
+    stopWaitEvent = threading.Event()
 
     def __init__(self, connectionControl, handler, queue):
         """Sets up the ControlThread.
@@ -295,27 +259,30 @@ class ControlThread(threading.Thread):
         raises an exception, or when a returned url is None.
         """
 
-        retry_count = 0
+        retryCount = 0
         global STOP_CRAWLE
         while not STOP_CRAWLE:
-            # Get the URL to retrieve
             try:
-                # Queue returns a 3-tuple
-                queue_item = self.queue.get()
-            except:
+                requestResponse = self.queue.get()
+            except Exception, e:
                 if not STOP_CRAWLE:
                     sys.stderr.write("Queue error - stopping CRAWL-E\n")
                     sys.stderr.flush()
                     STOP_CRAWLE = True
+                sys.stderr.write("%s: %s\n" % (str(type(e)), e.__str__()))
                 break
 
-            if queue_item[0] is None:
-                ControlThread.stop_wait_event.clear()
-                ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
-                if ControlThread.stop_wait_event.isSet():
+        # The thread notification needs to change a bit to take account of
+        # threads which may be working at the time the queue is empty, rather
+        # than simply sleeping for a given time period.
+
+            if requestResponse is None:
+                ControlThread.stopWaitEvent.clear()
+                ControlThread.stopWaitEvent.wait(EMPTY_QUEUE_WAIT)
+                if ControlThread.stopWaitEvent.isSet():
                     continue
-                if retry_count < ControlThread.EMPTY_QUEUE_RETRYS:
-                    retry_count += 1
+                if retryCount < ControlThread.EMPTY_QUEUE_RETRYS:
+                    retryCount += 1
                     continue
 
                 if not STOP_CRAWLE:
@@ -324,40 +291,36 @@ class ControlThread(threading.Thread):
                     STOP_CRAWLE = True
                 break
 
-            retry_count = 0
-            url, url_headers, url_extra = self.handler.preProcess(queue_item)
-            response = self.connectionControl.request(url, 0, url_headers,
-                                                      url_extra)
-            if response:
-                self.handler.process(response, self.queue)
+            retryCount = 0
+            requestResponse = self.handler.preProcess(requestResponse)
+            self.connectionControl.request(requestResponse)
+            self.handler.process(requestResponse, self.queue)
 
             # Now release waiting threads
-            ControlThread.stop_wait_event.set()            
+            ControlThread.stopWaitEvent.set()            
 
 
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, queue, numThreads=1, doRedirect=True):
+    def __init__(self, handler, queue, numThreads=1):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         queue -- The handle the the queue class
         numThreads -- The number of threads to spwan (Default 1)
-        doRedirect -- If true redirects will transparently be handled
         """
         self.threads = []
-        self.connection_ctrl = HTTPConnectionControl(handler=handler,
-                                                     doRedirect=doRedirect)
+        self.connectionCtrl = HTTPConnectionControl(handler=handler)
         self.handler = handler
-        self.already_stopped = False
+        self.alreadyStopped = False
 
         ControlThread.EMPTY_QUEUE_RETRYS = 1
 
         for x in range(numThreads):
             thread = ControlThread(handler=handler, queue=queue,
-                                   connectionControl=self.connection_ctrl)
+                                   connectionControl=self.connectionCtrl)
             self.threads.append(thread)
 
     def start(self):

@@ -1,23 +1,15 @@
 import sys, threading, Queue
+import core
 
 class CrawlQueue(object):
     """CrawlQueue is an abstract class in the sense that it needs to be
     subclassed with its get and put methods defined."""
 
     def get(self):
-        """The get function must return three items.
-        url, headers, extra
-        where:
-             url     - a string representing the url to crawl
-             headers - a dictionary of headers to make the request with.
-                       for no headers simply return None. To specifiy to the
-                       crawler that there are no valid headers return False
-             extra   - any additional object to pass between the queue and the
-                       handler. Can be None
-        """
+        """The get function must return a RequestResponse object."""
         raise "CrawlQueue.get() needs to be implemented"
     
-    def put(self, queue_item):
+    def put(self, queueItem):
         raise "CrawlQueue.put(queue_item) needs to be implemented"
 
 class URLQueue(CrawlQueue):
@@ -78,9 +70,10 @@ class URLQueue(CrawlQueue):
         elif size % 1000 == 0: print "Queue Size: %d" % size
 
         try:
-            return self.queue.get(block=True, timeout=5), None, None
+            url = self.queue.get(block=False)
+            return core.RequestResponse(url)
         except Queue.Empty:
-            return None, None, None
+            return None
 
     def put(self, url):
         self.queue.put(url)
