@@ -460,6 +460,5 @@ def runCrawle(argv, handler):
 
 
 if __name__ == '__main__':
-    """Basic example of how to start CRAWL-E. The assumption is that
-    a queue is running and the url for it is known."""
+    """Basic example of how to start CRAWL-E."""
     runCrawle(sys.argv, handler=VisitURLHandler())
