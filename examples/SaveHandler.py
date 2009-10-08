@@ -15,17 +15,17 @@ class SaveURLHandler(Crawle.core.Handler):
 	self.lock = threading.Lock()
 	self.exit = False
 
-    def process(self, info, rmi):
-        if info['status'] != 200:
-            print "%d - putting %s back on queue" % (info['status'],
-                                                     info['url'])
-            rmi.put(info['url'])
+    def process(self, reqRes, queue):
+        if reqRes.responseStatus != 200:
+            print "%d - putting %s back on queue" % (reqRes.responseStatus,
+                                                     reqRes.responseURL)
+            queue.put(reqRes.responseURL)
         else:
             self.lock.acquire()
             if self.exit:
                 self.lock.release()
                 return
-            self.output.write(info['body'])
+            self.output.write(reqRes.responseBody)
             self.output.write("===*===\n")
             self.lock.release()
 				
