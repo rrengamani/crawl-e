@@ -39,15 +39,73 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
-        pass
+        self.cc = crawle.HTTPConnectionControl(crawle.Handler)
+        self.cc.handler = HackedHandler
 
-class TestControlThread(unittest.TestCase):
-    def setUp(self):
-        pass
+    def testRequestSTOP_CRAWLE(self):
+        crawle.STOP_CRAWLE = True
+        rr = crawle.RequestResponse('')
+        self.cc.request(rr)
+        self.assertEqual('CRAWL-E Stopped', rr.errorMsg)
+        crawle.STOP_CRAWLE = False
 
-class TestController(unittest.TestCase):
-    def setUp(self):
-        pass
+    def testRequestPreProcess(self):
+        rr = crawle.RequestResponse('http://google.com')
+        self.cc.handler = preProcessFailHandler
+        self.cc.request(rr)
+        self.assertEqual('Aborted in preProcess', rr.errorMsg)
+
+    def testRequestInvalidHostname(self):
+        rr = crawle.RequestResponse('http://invalid')
+        self.cc.request(rr)
+        self.assertEqual('Socket Error', rr.errorMsg)
+        self.assertEqual('No address associated with hostname',
+                         rr.errorObject.args[1])
+
+    def testRequestInvalidURL(self):
+        urls = ['invalid', 'http:///invalid', 'https://google.com']
+        for url in urls:        
+            rr = crawle.RequestResponse(url)
+            self.cc.request(rr)
+            self.assertEqual('Invalid URL', rr.errorMsg)
+
+    def testRequest301(self):
+        rr = crawle.RequestResponse('http://google.com', maxRedirects=None)
+        self.cc.request(rr)
+        self.assertEqual(301, rr.responseStatus)
+        self.assertEqual('http://www.google.com/',
+                         rr.responseHeaders['location'])
+
+    def testRequestRedirectExceeded(self):
+        rr = crawle.RequestResponse('http://google.com', maxRedirects=0)
+        self.cc.request(rr)
+        self.assertEqual('Redirect count exceeded', rr.errorMsg)
+
+    def testRequestSuccessfulRedirect(self):
+        rr = crawle.RequestResponse('http://google.com', maxRedirects=1)
+        self.cc.request(rr)
+        self.assertEqual(200, rr.responseStatus)
+        self.assertEqual(0, rr.redirects)
+
+    def testRequest200(self):
+        rr = crawle.RequestResponse('http://www.google.com', maxRedirects=1)
+        self.cc.request(rr)
+        self.assertEqual(200, rr.responseStatus)
+        self.assertEqual(1, rr.redirects)
+
+
+###
+# HELPER CLASSES
+###
+
+class HackedHandler(crawle.Handler):
+    @staticmethod
+    def preProcess(reqRes): pass
+
+class preProcessFailHandler(crawle.Handler):
+    @staticmethod
+    def preProcess(reqRes): reqRes.responseURL = None
+
     
 if __name__ == '__main__':
     unittest.main()

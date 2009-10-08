@@ -131,12 +131,14 @@ class HTTPConnectionControl(object):
             return
 
         self.handler.preProcess(reqRes)
-        if not reqRes.responseURL:
+        if reqRes.responseURL == None:
             reqRes.errorMsg = 'Aborted in preProcess'
             return
 
         u = urlparse.urlparse(reqRes.responseURL)
-        request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
+        if u.scheme != 'http' or u.netloc == '':
+            reqRes.errorMsg = 'Invalid URL'
+            return
 
         try:
             address = (socket.gethostbyname(u.hostname), u.port)
@@ -144,6 +146,14 @@ class HTTPConnectionControl(object):
             reqRes.errorMsg = 'Socket Error'
             reqRes.errorObject = e
             return
+
+        request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
+        if reqRes.requestHeaders:
+            headers = reqRes.requestHeaders
+        else:
+            headers = {}
+        headers['Host'] = u.hostname
+
 
         self.lock.acquire()
         try:
@@ -154,20 +164,6 @@ class HTTPConnectionControl(object):
         self.lock.release()
         connection = connectionQueue.getConnection()
             
-        if reqRes.requestHeaders is False:
-            reqRes.errorMsg = 'Request terminated by queue'
-            return
-        elif reqRes.requestHeaders:
-            headers = reqRes.requestHeaders
-        else:
-            headers = {}
-        headers['Host'] = u.hostname
-
-        # This should be deleted at somepoint when https is handled
-        if u.scheme != 'http':
-            reqRes.errorMsg = 'Unsupported scheme'
-            return
-
         try:
             connection.request('GET', request, '', headers)
             response = connection.getresponse()
@@ -198,15 +194,15 @@ class HTTPConnectionControl(object):
             return
 
         # Handle redirect
-        if response.status in (301, 302, 303) and reqRes.redirects:
+        if response.status in (301, 302, 303) and reqRes.redirects != None:
             if reqRes.redirects <= 0:
                 reqRes.errorMsg = 'Redirect count exceeded'
                 return
             reqRes.redirects -= 1
-            redirectURL = response.getheader('Location')
+            redirectURL = response.getheader('location')
             reqRes.responseURL = urlparse.urljoin(reqRes.responseURL,
                                                   redirectURL)
-            redirect = self.request(reqRes)
+            self.request(reqRes)
             return
 
         reqRes.responseStatus = response.status
