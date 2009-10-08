@@ -22,15 +22,6 @@ Running
 Check out the examples folder. The script run_it.sh should be sufficient to get
 you started.
 
-Modules
----------------------
-CRAWL-E contains two files: core.py and queue.py
-    core.py  - This file contains all the core infrastructure to CRAWL-E, which
-    	       is explained below.
-    crawlqueue.py - This file contains the infrastructure to the locking queue.
-
-
-
 The heart of CRAWL-E relies on extending the Crawle.core.Handler, in which one
 must implement a process function. This function is where all the magic can
 happen. We say can happen because it's entirely up to you what to do in this

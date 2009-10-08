@@ -8,5 +8,5 @@ setup(name='CRAWL-E',
       author='Bryce Boe',
       author_email='bboe (_at_) cs.ucsb.edu',
       url='http://code.google.com/p/crawl-e',
-      packages=['Crawle']
+      py_modules = ['crawle']
       )

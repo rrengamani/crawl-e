@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import gzip, sys, threading
-import Crawle.core
+import crawle
 
-class SaveURLHandler(Crawle.core.Handler):
+class SaveURLHandler(crawle.Handler):
     """This handler simply saves all pages. into a gziped file. Any reponses
     with status other than 200 is placed back on the queue.
 
@@ -35,4 +35,4 @@ class SaveURLHandler(Crawle.core.Handler):
         self.output.close()
 
 if __name__ == '__main__':
-    Crawle.core.runCrawle(sys.argv, handler=SaveURLHandler('output.gz'))
+    crawle.runCrawle(sys.argv, handler=SaveURLHandler('output.gz'))
