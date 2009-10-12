@@ -39,8 +39,7 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
-        self.cc = crawle.HTTPConnectionControl(crawle.Handler)
-        self.cc.handler = HackedHandler
+        self.cc = crawle.HTTPConnectionControl(crawle.Handler())
 
     def testRequestSTOP_CRAWLE(self):
         crawle.STOP_CRAWLE = True
@@ -51,7 +50,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
 
     def testRequestPreProcess(self):
         rr = crawle.RequestResponse('http://google.com')
-        self.cc.handler = preProcessFailHandler
+        self.cc.handler = preProcessFailHandler()
         self.cc.request(rr)
         self.assertEqual('Aborted in preProcess', rr.errorMsg)
 
@@ -114,13 +113,8 @@ class TestHTTPConnectionControl(unittest.TestCase):
 # HELPER CLASSES
 ###
 
-class HackedHandler(crawle.Handler):
-    @staticmethod
-    def preProcess(reqRes): pass
-
 class preProcessFailHandler(crawle.Handler):
-    @staticmethod
-    def preProcess(reqRes): reqRes.responseURL = None
+    def preProcess(self, reqRes): reqRes.responseURL = None
 
     
 if __name__ == '__main__':
