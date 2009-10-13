@@ -433,8 +433,8 @@ class URLQueue(CrawlQueue):
                 now = time.time()
                 print 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)' % (
                     self.totalItems, self.queue.qsize(),
-                    1000 / (now - self.blockTime)),
-                    self.totalItems / (now - self.startTime)
+                    1000 / (now - self.blockTime),
+                    self.totalItems / (now - self.startTime))
                 self.blockTime = now
             self.lock.release()
             return RequestResponse(url)
