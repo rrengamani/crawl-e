@@ -378,6 +378,9 @@ class URLQueue(CrawlQueue):
         seedfile -- file containing urls to seed the queue (default None)
         """
         self.queue = Queue.Queue(0)
+        self.lock = threading.Lock()
+        self.startTime = self.blockTime = None
+        self.totalItems = 0
 
         # Add seeded items to the queue
         if seedfile:
@@ -420,12 +423,20 @@ class URLQueue(CrawlQueue):
 
     def get(self):
         """Return url at the head of the queue or None if empty"""
-        size = self.queue.qsize()
-        if size == 0: print "Queue empty"
-        elif size % 1000 == 0: print "Queue Size: %d" % size
-
         try:
             url = self.queue.get(block=False)
+            self.lock.acquire()
+            self.totalItems += 1
+            if self.startTime == None:
+                self.startTime = self.blockTime = time.time()
+            elif self.totalItems % 1000 == 0:
+                now = time.time()
+                print 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)' % (
+                    self.totalItems, self.queue.qsize(),
+                    1000 / (now - self.blockTime)),
+                    self.totalItems / (now - self.startTime)
+                self.blockTime = now
+            self.lock.release()
             return RequestResponse(url)
         except Queue.Empty:
             return None
