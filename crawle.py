@@ -1,5 +1,5 @@
-import gzip, httplib, socket, sys, threading, time, urllib, urlparse
-import Queue, StringIO
+import cStringIO, gzip, httplib, socket, sys, threading, time, urllib, urlparse
+import Queue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -223,7 +223,7 @@ class HTTPConnectionControl(object):
         reqRes.responseHeaders = dict(response.getheaders())
         if 'content-encoding' in reqRes.responseHeaders and \
                 reqRes.responseHeaders['content-encoding'] == 'gzip':
-            temp = gzip.GzipFile(fileobj=StringIO.StringIO(responseBody))
+            temp = gzip.GzipFile(fileobj=cStringIO.StringIO(responseBody))
             reqRes.responseBody = temp.read()
             temp.close()
         else:
