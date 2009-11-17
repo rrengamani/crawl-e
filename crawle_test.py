@@ -98,6 +98,16 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.assertEqual(1, rr.redirects)
         self.assertTrue(rr.responseTime > 0)
 
+
+    def testRequestGzip(self):
+        rr = crawle.RequestResponse('http://www.pricetrackr.com/robots.txt',
+                                    redirects=1)
+        self.cc.request(rr)
+        self.assertEqual(200, rr.responseStatus)
+        self.assertEqual(1, rr.redirects)
+        self.assertTrue(rr.responseTime > 0)
+        self.assertTrue('User-agent' in rr.responseBody)
+
     def testRequestPost(self):
         rr = crawle.RequestResponse(
             'http://www.snee.com/xml/crud/posttest.cgi', method='POST',

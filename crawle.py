@@ -1,4 +1,5 @@
-import httplib, socket, sys, threading, time, urllib, urlparse, Queue
+import gzip, httplib, socket, sys, threading, time, urllib, urlparse
+import Queue, StringIO
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -155,8 +156,10 @@ class HTTPConnectionControl(object):
             headers = reqRes.requestHeaders
         else:
             headers = {}
-        headers['Host'] = u.hostname
-
+        if 'Host' not in headers:
+            headers['Host'] = u.hostname
+        if 'Accept-Encoding' not in headers:
+            headers['Accept-Encoding'] = 'gzip'
 
         self.lock.acquire()
         try:
@@ -218,7 +221,13 @@ class HTTPConnectionControl(object):
         reqRes.responseTime = responseTime
         reqRes.responseStatus = response.status
         reqRes.responseHeaders = dict(response.getheaders())
-        reqRes.responseBody = responseBody
+        if 'content-encoding' in reqRes.responseHeaders and \
+                reqRes.responseHeaders['content-encoding'] == 'gzip':
+            temp = gzip.GzipFile(fileobj=StringIO.StringIO(responseBody))
+            reqRes.responseBody = temp.read()
+            temp.close()
+        else:
+            reqRes.responseBody = responseBody
 
 
 class ControlThread(threading.Thread):
