@@ -69,13 +69,14 @@ class HTTPConnectionQueue(object):
     """
     REQUEST_LIMIT = None
 
-    def __init__(self, address):
+    def __init__(self, address, encrypted=False):
         """Constructs a HTTPConnectionQueueobject.
 
         Keyword Arguments:
         address -- The address for which this object maps to.
         """
         self.address = address
+        self.encrypted = encrypted
         self.queue = Queue.Queue(0)
 
     def getConnection(self):
@@ -87,25 +88,23 @@ class HTTPConnectionQueue(object):
         Dynamically add new field to HTTPConnection called requestCount to
         keep track of the number of requests made with the specific connection.
         """
-        host, port, scheme = self.address
         try:
             connection = self.queue.get(block=False)
             """Reset the connection if exceeds request limit"""
             if self.REQUEST_LIMIT and \
                     connection.requestCount >= self.REQUEST_LIMIT:
                 connection.close()
-                if scheme != 'https':
-                    connection = httplib.HTTPConnection(host, port)
+                if self.encrypted:
+                    connection = httplib.HTTPSConnection(*self.address)
                 else:
-                    connection = httplib.HTTPSConnection(host, port)
+                    connection = httplib.HTTPConnection(*self.address)
                 connection.requestCount = 0
         except Queue.Empty:
-            if scheme != 'https':
-                connection = httplib.HTTPConnection(host, port)
+            if self.encrypted:
+                connection = httplib.HTTPSConnection(*self.address)
             else:
-                connection = httplib.HTTPSConnection(host, port)
+                connection = httplib.HTTPConnection(*self.address)
             connection.requestCount = 0
-        
         return connection
 
     def putConnection(self, connection):
@@ -152,7 +151,8 @@ class HTTPConnectionControl(object):
             return
 
         try:
-            address = (socket.gethostbyname(u.hostname), u.port, u.scheme)
+            address = socket.gethostbyname(u.hostname), u.port
+            encrypted = u.scheme == 'https'
         except socket.error, e:
             reqRes.errorMsg = 'Socket Error'
             reqRes.errorObject = e
@@ -172,7 +172,7 @@ class HTTPConnectionControl(object):
         try:
             connectionQueue = self.connectionQueues[address]
         except:
-            connectionQueue = HTTPConnectionQueue(address)
+            connectionQueue = HTTPConnectionQueue(address, encrypted)
             self.connectionQueues[address] = connectionQueue
         self.lock.release()
         connection = connectionQueue.getConnection()

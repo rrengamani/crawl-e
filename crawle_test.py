@@ -99,7 +99,9 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.assertTrue(rr.responseTime > 0)
 
     def testHTTPSRequest200(self):
-        rr = crawle.RequestResponse('https://twitter.com/', redirects=1)
+        # Page that can only be accessed via https, http causes redirect
+        url = 'https://msp.f-secure.com/web-test/common/test.html'
+        rr = crawle.RequestResponse(url, redirects=1)
         self.cc.request(rr)
         self.assertEqual(200, rr.responseStatus)
         self.assertEqual(1, rr.redirects)
