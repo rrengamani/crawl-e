@@ -79,7 +79,7 @@ class HTTPConnectionQueue(object):
         self.queue = Queue.Queue(0)
 
     def getConnection(self):
-        """Return a HTTPConnection object for the appropriate address.
+        """Return a HTTP(S)Connection object for the appropriate address.
         
         First try to return the object from the queue, however if the queue
         is empty create a new socket object to return.
@@ -87,16 +87,23 @@ class HTTPConnectionQueue(object):
         Dynamically add new field to HTTPConnection called requestCount to
         keep track of the number of requests made with the specific connection.
         """
+        host, port, scheme = self.address
         try:
             connection = self.queue.get(block=False)
             """Reset the connection if exceeds request limit"""
             if self.REQUEST_LIMIT and \
                     connection.requestCount >= self.REQUEST_LIMIT:
                 connection.close()
-                connection = httplib.HTTPConnection(*self.address)
+                if scheme != 'https':
+                    connection = httplib.HTTPConnection(host, port)
+                else:
+                    connection = httplib.HTTPSConnection(host, port)
                 connection.requestCount = 0
         except Queue.Empty:
-            connection = httplib.HTTPConnection(*self.address)
+            if scheme != 'https':
+                connection = httplib.HTTPConnection(host, port)
+            else:
+                connection = httplib.HTTPSConnection(host, port)
             connection.requestCount = 0
         
         return connection
@@ -140,12 +147,12 @@ class HTTPConnectionControl(object):
             return
 
         u = urlparse.urlparse(reqRes.responseURL)
-        if u.scheme != 'http' or u.netloc == '':
+        if u.scheme not in ['http', 'https'] or u.netloc == '':
             reqRes.errorMsg = 'Invalid URL'
             return
 
         try:
-            address = (socket.gethostbyname(u.hostname), u.port)
+            address = (socket.gethostbyname(u.hostname), u.port, u.scheme)
         except socket.error, e:
             reqRes.errorMsg = 'Socket Error'
             reqRes.errorObject = e
@@ -174,6 +181,7 @@ class HTTPConnectionControl(object):
             start = time.time()
             if reqRes.requestParams:
                 data = urllib.urlencode(reqRes.requestParams)
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
                 data = ''
             connection.request(reqRes.requestMethod, request, data, headers)

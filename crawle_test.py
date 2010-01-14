@@ -5,7 +5,7 @@ import socket, unittest
 
 class TestHTTPConnectionQueue(unittest.TestCase):
     def setUp(self):
-        address = (socket.gethostbyname('127.0.0.1'), 80)
+        address = (socket.gethostbyname('127.0.0.1'), 80, 'http')
         self.cq = crawle.HTTPConnectionQueue(address)
 
     def testQueueLength(self):
@@ -67,7 +67,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
                          rr.errorObject.args[1])
 
     def testRequestInvalidURL(self):
-        urls = ['invalid', 'http:///invalid', 'https://google.com']
+        urls = ['invalid', 'http:///invalid', 'httpz://google.com']
         for url in urls:        
             rr = crawle.RequestResponse(url)
             self.cc.request(rr)
@@ -98,6 +98,12 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.assertEqual(1, rr.redirects)
         self.assertTrue(rr.responseTime > 0)
 
+    def testHTTPSRequest200(self):
+        rr = crawle.RequestResponse('https://twitter.com/', redirects=1)
+        self.cc.request(rr)
+        self.assertEqual(200, rr.responseStatus)
+        self.assertEqual(1, rr.redirects)
+        self.assertTrue(rr.responseTime > 0)
 
     def testRequestGzip(self):
         rr = crawle.RequestResponse('http://www.pricetrackr.com/robots.txt',
