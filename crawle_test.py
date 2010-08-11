@@ -57,7 +57,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
     def testRequestInvalidMethod(self):
         rr = crawle.RequestResponse('http://www.google.com', method='INVALID')
         self.cc.request(rr)
-        self.assertEqual(400, rr.responseStatus)
+        self.assertEqual(405, rr.responseStatus)
 
     def testRequestInvalidHostname(self):
         rr = crawle.RequestResponse('http://invalid')

@@ -292,8 +292,8 @@ class ControlThread(threading.Thread):
                     continue
 
                 if not STOP_CRAWLE:
-                    sys.stderr.write("Queue empty - stopping CRAWL-E\n")
-                    sys.stderr.flush()
+                    sys.stdout.write("Queue empty - stopping CRAWL-E\n")
+                    sys.stdout.flush()
                     STOP_CRAWLE = True
                 break
 
@@ -344,10 +344,10 @@ class Controller(object):
                 if not thread.isAlive():
                     break
             count += 1
-            sys.stderr.write("%d threads closed\r" % count)
-            sys.stderr.flush()
-        sys.stderr.write("                        \n")
-        sys.stderr.flush()
+            sys.stdout.write("%d threads closed\r" % count)
+            sys.stdout.flush()
+        sys.stdout.write("                        \n")
+        sys.stdout.flush()
 
     def stop(self):
         """Stops all threads gracefully"""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re, sys, threading
+import getpass, re, sys, threading
 import crawle
 
 class TwitterHandler(crawle.Handler):
@@ -79,7 +79,10 @@ class TwitterHandler(crawle.Handler):
         self.output.close()
 
 if __name__ == '__main__':
-    twitter_handler = TwitterHandler('username', 'password')
+    username = raw_input('Username: ')
+    password = getpass.getpass()
+
+    twitter_handler = TwitterHandler(username, password)
     queue = crawle.URLQueue()
     queue.queue.put('http://twitter.com/following')
     controller = crawle.Controller(handler=twitter_handler, queue=queue,
