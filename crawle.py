@@ -152,6 +152,12 @@ class HTTPConnectionControl(object):
 
         try:
             address = socket.gethostbyname(u.hostname), u.port
+            if address == ('67.215.65.132', None):
+                # Simulate failure on OPEN DNS
+                msg = 'No address associated with hostname'
+                reqRes.errorMsg = 'Socket Error'
+                reqRes.errorObject = Exception(None, msg)
+                return
             encrypted = u.scheme == 'https'
         except socket.error, e:
             reqRes.errorMsg = 'Socket Error'
