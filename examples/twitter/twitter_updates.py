@@ -79,6 +79,9 @@ class TwitterHandler(crawle.Handler):
         self.output.close()
 
 if __name__ == '__main__':
+    print "This is broken for now"
+    sys.exit(1)
+
     username = raw_input('Username: ')
     password = getpass.getpass()
 
