@@ -192,7 +192,7 @@ unusedNames = ['_', 'empty', 'unused', 'dummy']
 missingAttrs = []
 
 # ignore use of deprecated modules/functions
-deprecated = 1
+deprecated = 0
 
 # maximum lines in a function
 maxLines = 200
@@ -201,7 +201,7 @@ maxLines = 200
 maxBranches = 50
 
 # maximum returns in a function
-maxReturns = 12
+maxReturns = 3
 
 # maximum # of arguments to a function
 maxArgs = 10

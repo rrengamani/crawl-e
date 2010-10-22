@@ -3,7 +3,7 @@
 from distutils.core import setup
 
 setup(name='CRAWL-E',
-      version='.2',
+      version='.3',
       description='Highly distributed web crawling framework',
       author='Bryce Boe',
       author_email='bboe (_at_) cs.ucsb.edu',

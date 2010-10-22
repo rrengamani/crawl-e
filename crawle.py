@@ -55,6 +55,8 @@ class RequestResponse(object):
         params -- The http parameters.
         redirects -- The maximum number of redirects to follow.
         """
+        self.error = None
+
         self.request_headers = headers
         self.request_url = url
         self.request_method = method
@@ -66,9 +68,6 @@ class RequestResponse(object):
         self.response_headers = None
         self.response_body = None
         self.response_time = None
-
-        self.error_msg = None
-        self.error_object = None
 
 
 class HTTPConnectionQueue(object):
@@ -148,32 +147,20 @@ class HTTPConnectionControl(object):
     def request(self, req_res):
         """Handles the request to the server."""
         if STOP_CRAWLE:
-            req_res.error_msg = 'CRAWL-E Stopped'
-            return
+            raise Exception('CRAWL-E Stopped')
 
         self.handler.pre_process(req_res)
         if req_res.response_url == None:
-            req_res.error_msg = 'Aborted in pre_process'
-            return
+            raise Exception('Aborted in pre_process')
 
         u = urlparse.urlparse(req_res.response_url)
         if u.scheme not in ['http', 'https'] or u.netloc == '':
-            req_res.error_msg = 'Invalid URL'
-            return
+            raise Exception('Invalid URL scheme')
 
-        try:
-            address = socket.gethostbyname(u.hostname), u.port
-            if address == ('67.215.65.132', None):
-                # Simulate failure on OPEN DNS
-                msg = 'No address associated with hostname'
-                req_res.error_msg = 'Socket Error'
-                req_res.error_object = Exception(None, msg)
-                return
-            encrypted = u.scheme == 'https'
-        except socket.error, e:
-            req_res.error_msg = 'Socket Error'
-            req_res.error_object = e
-            return
+        address = socket.gethostbyname(u.hostname), u.port
+        if address == ('67.215.65.132', None):
+            raise socket.error('OPENDNS Non-existent domain')
+        encrypted = u.scheme == 'https'
 
         request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
         if req_res.request_headers:
@@ -206,53 +193,29 @@ class HTTPConnectionControl(object):
             response_time = time.time() - start
             response_body = response.read()
             connection_queue.put_connection(connection)
-        except httplib.ResponseNotReady:
-            sys.stderr.write(' '.join(('A previous request did not call'
-                                       'read(). This shouldn\'t happen\n')))
-            sys.stderr.flush()
+        except Exception:
             connection.close()
-            req_res.error_msg = 'Response not ready'
-            return
-        except httplib.BadStatusLine:
-            connection.close()
-            req_res.error_msg = 'Bad status line'
-            return
-        except socket.error, e:
-            connection.close()
-            req_res.error_msg = 'Socket error'
-            req_res.error_object = e
-            return
-        except Exception, e:
-            sys.stderr.write('Unhandled exception -- FIXY TIME\n')
-            sys.stderr.write("%s: %s\n" % (str(type(e)), e.__str__()))
-            sys.stderr.flush()
-            connection.close()
-            req_res.error_msg = 'Unhandled exception'
-            req_res.error_object = e
-            return
+            raise
 
-        # Handle redirect
         if response.status in (301, 302, 303) and req_res.redirects != None:
             if req_res.redirects <= 0:
-                req_res.error_msg = 'Redirect count exceeded'
-                return
+                raise Exception('Redirect count exceeded')
             req_res.redirects -= 1
             redirect_url = response.getheader('location')
             req_res.response_url = urlparse.urljoin(req_res.response_url,
                                                     redirect_url)
             self.request(req_res)
-            return
-
-        req_res.response_time = response_time
-        req_res.response_status = response.status
-        req_res.response_headers = dict(response.getheaders())
-        if 'content-encoding' in req_res.response_headers and \
-                req_res.response_headers['content-encoding'] == 'gzip':
-            temp = gzip.GzipFile(fileobj=cStringIO.StringIO(response_body))
-            req_res.response_body = temp.read()
-            temp.close()
         else:
-            req_res.response_body = response_body
+            req_res.response_time = response_time
+            req_res.response_status = response.status
+            req_res.response_headers = dict(response.getheaders())
+            if 'content-encoding' in req_res.response_headers and \
+                    req_res.response_headers['content-encoding'] == 'gzip':
+                temp = gzip.GzipFile(fileobj=cStringIO.StringIO(response_body))
+                req_res.response_body = temp.read()
+                temp.close()
+            else:
+                req_res.response_body = response_body
 
 
 class ControlThread(threading.Thread):
@@ -313,10 +276,12 @@ class ControlThread(threading.Thread):
                 break
 
             retry_count = 0
-            self.connection_control.request(request_response)
+            try:
+                self.connection_control.request(request_response)
+            except Exception, e:
+                request_response.error = e
             self.handler.process(request_response, self.queue)
 
-            # Now release waiting threads
             ControlThread.stop_wait_event.set()            
 
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python
-import crawle
-import socket, unittest
+import crawle, socket, unittest
 
 class TestHTTPConnectionQueue(unittest.TestCase):
     def setUp(self):
@@ -36,6 +35,7 @@ class TestHTTPConnectionQueue(unittest.TestCase):
             self.assertEqual(conn.request_count, i)
             self.cq.put_connection(conn)
 
+
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
         self.cc = crawle.HTTPConnectionControl(crawle.Handler())
@@ -43,15 +43,22 @@ class TestHTTPConnectionControl(unittest.TestCase):
     def testRequestSTOP_CRAWLE(self):
         crawle.STOP_CRAWLE = True
         rr = crawle.RequestResponse('')
-        self.cc.request(rr)
-        self.assertEqual('CRAWL-E Stopped', rr.error_msg)
-        crawle.STOP_CRAWLE = False
+        try:
+            self.cc.request(rr)
+            self.fail('Did not raise CRAWL-E Stopped exception.')
+        except Exception, e:
+            self.assertEqual('CRAWL-E Stopped', e.args[0])
+        finally:
+            crawle.STOP_CRAWLE = False
 
     def testRequestPreProcess(self):
         rr = crawle.RequestResponse('http://google.com')
         self.cc.handler = PreProcessFailHandler()
-        self.cc.request(rr)
-        self.assertEqual('Aborted in pre_process', rr.error_msg)
+        try:
+            self.cc.request(rr)
+            self.fail('Did not raise Aborted in pre_process exception.')
+        except Exception, e:
+            self.assertEqual('Aborted in pre_process', e.args[0])
 
     def testRequestInvalidMethod(self):
         rr = crawle.RequestResponse('http://www.google.com', method='INVALID')
@@ -60,17 +67,23 @@ class TestHTTPConnectionControl(unittest.TestCase):
 
     def testRequestInvalidHostname(self):
         rr = crawle.RequestResponse('http://invalid')
-        self.cc.request(rr)
-        self.assertEqual('Socket Error', rr.error_msg)
-        self.assertEqual('No address associated with hostname',
-                         rr.error_object.args[1])
+        try:
+            self.cc.request(rr)
+            self.fail('Did not raise invalid hostname exception')
+        except socket.gaierror, e:
+            self.assertEqual(-5, e.errno)
+        except socket.error, e:
+            self.assertEqual('OPENDNS Non-existent domain', e.args[0])
 
     def testRequestInvalidURL(self):
         urls = ['invalid', 'http:///invalid', 'httpz://google.com']
-        for url in urls:        
+        for url in urls:
             rr = crawle.RequestResponse(url)
-            self.cc.request(rr)
-            self.assertEqual('Invalid URL', rr.error_msg)
+            try:
+                self.cc.request(rr)
+                self.fail('Did not raise Invalid URL exception.')
+            except Exception, e:
+                self.assertEqual('Invalid URL scheme', e.args[0])
 
     def testRequest301(self):
         rr = crawle.RequestResponse('http://google.com', redirects=None)
@@ -81,8 +94,11 @@ class TestHTTPConnectionControl(unittest.TestCase):
 
     def testRequestRedirectExceeded(self):
         rr = crawle.RequestResponse('http://google.com', redirects=0)
-        self.cc.request(rr)
-        self.assertEqual('Redirect count exceeded', rr.error_msg)
+        try:
+            self.cc.request(rr)
+            self.fail('Did not raise redirect count exceeeded exception.')
+        except Exception, e:
+            self.assertEqual('Redirect count exceeded', e.args[0])
 
     def testRequestSuccessfulRedirect(self):
         rr = crawle.RequestResponse('http://google.com', redirects=1)
@@ -126,10 +142,10 @@ class TestHTTPConnectionControl(unittest.TestCase):
                                  '<p>Last name: "POST_TEST"</p>'])
                         in rr.response_body)
 
+
 ###
 # HELPER CLASSES
 ###
-
 class PreProcessFailHandler(crawle.Handler):
     def pre_process(self, req_res): req_res.response_url = None
 
