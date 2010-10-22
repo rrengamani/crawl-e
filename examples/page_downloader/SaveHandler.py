@@ -15,21 +15,21 @@ class SaveURLHandler(crawle.Handler):
 	self.lock = threading.Lock()
 	self.exit = False
 
-    def process(self, reqRes, queue):
-        if not reqRes.responseStatus:
-            print reqRes.errorMsg
+    def process(self, req_res, queue):
+        if not req_res.response_status:
+            print req_res.error_msg
             return
 
-        if reqRes.responseStatus != 200:
-            print "%d - putting %s back on queue" % (reqRes.responseStatus,
-                                                     reqRes.responseURL)
-            queue.put(reqRes.responseURL)
+        if req_res.response_status != 200:
+            print "%d - putting %s back on queue" % (req_res.response_status,
+                                                     req_res.response_url)
+            queue.put(req_res.response_url)
         else:
             self.lock.acquire()
             if self.exit:
                 self.lock.release()
                 return
-            self.output.write(reqRes.responseBody)
+            self.output.write(req_res.response_body)
             self.output.write("===*===\n")
             self.lock.release()
 				
@@ -39,4 +39,4 @@ class SaveURLHandler(crawle.Handler):
         self.output.close()
 
 if __name__ == '__main__':
-    crawle.runCrawle(sys.argv, handler=SaveURLHandler('output.gz'))
+    crawle.run_crawle(sys.argv, handler=SaveURLHandler('output.gz'))

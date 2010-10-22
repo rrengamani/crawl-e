@@ -1,3 +1,5 @@
+"""CRAWL-E is a highly distributed web crawling framework."""
+
 import cStringIO, gzip, httplib, socket, sys, threading, time, urllib, urlparse
 import Queue
 
@@ -12,8 +14,8 @@ class Handler(object):
     access to the same instance.
     """
 
-    def preProcess(self, requestResponse):
-        """PreProcess is called directly before making the reqeust. Any of the
+    def pre_process(self, request_response):
+        """pre_process is called directly before making the reqeust. Any of the
         request parameters can be modified here.
 
         Setting the responseURL to None will cause the request to be dropped.
@@ -21,14 +23,15 @@ class Handler(object):
         """
         return
     
-    def process(self, requestResponse, queue):
+    def process(self, request_response, queue):
         """Process is called after the request has been made. It needs to be
         implemented by a subclass.
 
         Keyword Arguments:
-        requestResponse -- the request response object
+        request_response -- the request response object
         queue -- the handler to the queue class
         """
+        assert request_response and queue # pychecker hack
         raise NotImplementedError(' '.join(('Handler.process must be defined',
                                             'in a subclass')))
 
@@ -43,20 +46,29 @@ class RequestResponse(object):
 
     def __init__(self, url, headers=None, method='GET', params=None,
                  redirects=10):
-        self.requestHeaders = headers
-        self.requestURL = url
-        self.requestMethod = method
-        self.requestParams = params
+        """Constructs a RequestResponse object.
+        
+        KeyWord Arguments:
+        url -- The url to request.
+        headers -- The http request headers.
+        method -- The http request method.
+        params -- The http parameters.
+        redirects -- The maximum number of redirects to follow.
+        """
+        self.request_headers = headers
+        self.request_url = url
+        self.request_method = method
+        self.request_params = params
         self.redirects = redirects
 
-        self.responseStatus = None
-        self.responseURL = url
-        self.responseHeaders = None
-        self.responseBody = None
-        self.responseTime = None
+        self.response_status = None
+        self.response_url = url
+        self.response_headers = None
+        self.response_body = None
+        self.response_time = None
 
-        self.errorMsg = None
-        self.errorObject = None
+        self.error_msg = None
+        self.error_object = None
 
 
 class HTTPConnectionQueue(object):
@@ -70,46 +82,47 @@ class HTTPConnectionQueue(object):
     REQUEST_LIMIT = None
 
     def __init__(self, address, encrypted=False):
-        """Constructs a HTTPConnectionQueueobject.
+        """Constructs a HTTPConnectionQueue object.
 
         Keyword Arguments:
         address -- The address for which this object maps to.
+        encrypted -- Where or not the connection is encrypted.
         """
         self.address = address
         self.encrypted = encrypted
         self.queue = Queue.Queue(0)
 
-    def getConnection(self):
+    def get_connection(self):
         """Return a HTTP(S)Connection object for the appropriate address.
         
         First try to return the object from the queue, however if the queue
         is empty create a new socket object to return.
 
-        Dynamically add new field to HTTPConnection called requestCount to
+        Dynamically add new field to HTTPConnection called request_count to
         keep track of the number of requests made with the specific connection.
         """
         try:
             connection = self.queue.get(block=False)
             """Reset the connection if exceeds request limit"""
             if self.REQUEST_LIMIT and \
-                    connection.requestCount >= self.REQUEST_LIMIT:
+                    connection.request_count >= self.REQUEST_LIMIT:
                 connection.close()
                 if self.encrypted:
                     connection = httplib.HTTPSConnection(*self.address)
                 else:
                     connection = httplib.HTTPConnection(*self.address)
-                connection.requestCount = 0
+                connection.request_count = 0
         except Queue.Empty:
             if self.encrypted:
                 connection = httplib.HTTPSConnection(*self.address)
             else:
                 connection = httplib.HTTPConnection(*self.address)
-            connection.requestCount = 0
+            connection.request_count = 0
         return connection
 
-    def putConnection(self, connection):
+    def put_connection(self, connection):
         """Put the HTTPConnection object back on the queue."""
-        connection.requestCount += 1
+        connection.request_count += 1
         self.queue.put(connection)
 
 
@@ -117,8 +130,8 @@ class HTTPConnectionControl(object):
     """This class handles HTTPConnectionQueues by storing a queue in a
     dictionary with the address as the index to the dictionary. Additionally
     this class handles resetting the connection when it reaches a specified
-    request limit."""
-    
+    request limit.
+    """
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
     def __init__(self, handler):
@@ -128,26 +141,24 @@ class HTTPConnectionControl(object):
         Keyword Arguments:
         handler -- The Handler class for checking if a url is valid.
         """
-        
-        self.connectionQueues = {}
+        self.connection_queues = {}
         self.lock = threading.Lock()
         self.handler = handler
 
-    def request(self, reqRes):
-        """Handles the request to the server.
-        """
+    def request(self, req_res):
+        """Handles the request to the server."""
         if STOP_CRAWLE:
-            reqRes.errorMsg = 'CRAWL-E Stopped'
+            req_res.error_msg = 'CRAWL-E Stopped'
             return
 
-        self.handler.preProcess(reqRes)
-        if reqRes.responseURL == None:
-            reqRes.errorMsg = 'Aborted in preProcess'
+        self.handler.pre_process(req_res)
+        if req_res.response_url == None:
+            req_res.error_msg = 'Aborted in pre_process'
             return
 
-        u = urlparse.urlparse(reqRes.responseURL)
+        u = urlparse.urlparse(req_res.response_url)
         if u.scheme not in ['http', 'https'] or u.netloc == '':
-            reqRes.errorMsg = 'Invalid URL'
+            req_res.error_msg = 'Invalid URL'
             return
 
         try:
@@ -155,18 +166,18 @@ class HTTPConnectionControl(object):
             if address == ('67.215.65.132', None):
                 # Simulate failure on OPEN DNS
                 msg = 'No address associated with hostname'
-                reqRes.errorMsg = 'Socket Error'
-                reqRes.errorObject = Exception(None, msg)
+                req_res.error_msg = 'Socket Error'
+                req_res.error_object = Exception(None, msg)
                 return
             encrypted = u.scheme == 'https'
         except socket.error, e:
-            reqRes.errorMsg = 'Socket Error'
-            reqRes.errorObject = e
+            req_res.error_msg = 'Socket Error'
+            req_res.error_object = e
             return
 
         request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
-        if reqRes.requestHeaders:
-            headers = reqRes.requestHeaders
+        if req_res.request_headers:
+            headers = req_res.request_headers
         else:
             headers = {}
         if 'Host' not in headers:
@@ -176,92 +187,91 @@ class HTTPConnectionControl(object):
 
         self.lock.acquire()
         try:
-            connectionQueue = self.connectionQueues[address]
+            connection_queue = self.connection_queues[address]
         except:
-            connectionQueue = HTTPConnectionQueue(address, encrypted)
-            self.connectionQueues[address] = connectionQueue
+            connection_queue = HTTPConnectionQueue(address, encrypted)
+            self.connection_queues[address] = connection_queue
         self.lock.release()
-        connection = connectionQueue.getConnection()
+        connection = connection_queue.get_connection()
             
         try:
             start = time.time()
-            if reqRes.requestParams:
-                data = urllib.urlencode(reqRes.requestParams)
+            if req_res.request_params:
+                data = urllib.urlencode(req_res.request_params)
                 headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
                 data = ''
-            connection.request(reqRes.requestMethod, request, data, headers)
+            connection.request(req_res.request_method, request, data, headers)
             response = connection.getresponse()
-            responseTime = time.time() - start
-            responseBody = response.read()
-            connectionQueue.putConnection(connection)
+            response_time = time.time() - start
+            response_body = response.read()
+            connection_queue.put_connection(connection)
         except httplib.ResponseNotReady:
             sys.stderr.write(' '.join(('A previous request did not call'
                                        'read(). This shouldn\'t happen\n')))
             sys.stderr.flush()
             connection.close()
-            reqRes.errorMsg = 'Response not ready'
+            req_res.error_msg = 'Response not ready'
             return
         except httplib.BadStatusLine:
             connection.close()
-            reqRes.errorMsg = 'Bad status line'
+            req_res.error_msg = 'Bad status line'
             return
         except socket.error, e:
             connection.close()
-            reqRes.errorMsg = 'Socket error'
-            reqRes.errorObject = e
+            req_res.error_msg = 'Socket error'
+            req_res.error_object = e
             return
         except Exception, e:
             sys.stderr.write('Unhandled exception -- FIXY TIME\n')
             sys.stderr.write("%s: %s\n" % (str(type(e)), e.__str__()))
             sys.stderr.flush()
             connection.close()
-            reqRes.errorMsg = 'Unhandled exception'
-            reqRes.errorObject = e
+            req_res.error_msg = 'Unhandled exception'
+            req_res.error_object = e
             return
 
         # Handle redirect
-        if response.status in (301, 302, 303) and reqRes.redirects != None:
-            if reqRes.redirects <= 0:
-                reqRes.errorMsg = 'Redirect count exceeded'
+        if response.status in (301, 302, 303) and req_res.redirects != None:
+            if req_res.redirects <= 0:
+                req_res.error_msg = 'Redirect count exceeded'
                 return
-            reqRes.redirects -= 1
-            redirectURL = response.getheader('location')
-            reqRes.responseURL = urlparse.urljoin(reqRes.responseURL,
-                                                  redirectURL)
-            self.request(reqRes)
+            req_res.redirects -= 1
+            redirect_url = response.getheader('location')
+            req_res.response_url = urlparse.urljoin(req_res.response_url,
+                                                    redirect_url)
+            self.request(req_res)
             return
 
-        reqRes.responseTime = responseTime
-        reqRes.responseStatus = response.status
-        reqRes.responseHeaders = dict(response.getheaders())
-        if 'content-encoding' in reqRes.responseHeaders and \
-                reqRes.responseHeaders['content-encoding'] == 'gzip':
-            temp = gzip.GzipFile(fileobj=cStringIO.StringIO(responseBody))
-            reqRes.responseBody = temp.read()
+        req_res.response_time = response_time
+        req_res.response_status = response.status
+        req_res.response_headers = dict(response.getheaders())
+        if 'content-encoding' in req_res.response_headers and \
+                req_res.response_headers['content-encoding'] == 'gzip':
+            temp = gzip.GzipFile(fileobj=cStringIO.StringIO(response_body))
+            req_res.response_body = temp.read()
             temp.close()
         else:
-            reqRes.responseBody = responseBody
+            req_res.response_body = response_body
 
 
 class ControlThread(threading.Thread):
     """A single thread of control"""
-
     EMPTY_QUEUE_RETRYS = 0
-    stopWaitEvent = threading.Event()
+    stop_wait_event = threading.Event()
 
-    def __init__(self, connectionControl, handler, queue):
+    def __init__(self, connection_control, handler, queue):
         """Sets up the ControlThread.
 
         Keyword Arguments:
-        connectionControl -- A HTTPConnectionControl object. This object is
-                             shared amongst the threads
+        connection_control -- A HTTPConnectionControl object. This object is
+                              shared amongst the threads
         handler -- The handler class for parsing the returned information
         queue	-- The handle to the queue class which implements get and put.
         """
         threading.Thread.__init__(self)
-        self.connectionControl = connectionControl
-        self.handler = handler;
+        self.connection_control = connection_control
+        self.handler = handler
         self.queue = queue
 
     def run(self):
@@ -270,12 +280,11 @@ class ControlThread(threading.Thread):
         The threads will stop when STOP_CRAWLE becomes true, when the queue
         raises an exception, or when a returned url is None.
         """
-
-        retryCount = 0
+        retry_count = 0
         global STOP_CRAWLE
         while not STOP_CRAWLE:
             try:
-                requestResponse = self.queue.get()
+                request_response = self.queue.get()
             except Exception, e:
                 if not STOP_CRAWLE:
                     sys.stderr.write("Queue error - stopping CRAWL-E\n")
@@ -288,13 +297,13 @@ class ControlThread(threading.Thread):
         # threads which may be working at the time the queue is empty, rather
         # than simply sleeping for a given time period.
 
-            if requestResponse is None:
-                ControlThread.stopWaitEvent.clear()
-                ControlThread.stopWaitEvent.wait(EMPTY_QUEUE_WAIT)
-                if ControlThread.stopWaitEvent.isSet():
+            if request_response is None:
+                ControlThread.stop_wait_event.clear()
+                ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
+                if ControlThread.stop_wait_event.isSet():
                     continue
-                if retryCount < ControlThread.EMPTY_QUEUE_RETRYS:
-                    retryCount += 1
+                if retry_count < ControlThread.EMPTY_QUEUE_RETRYS:
+                    retry_count += 1
                     continue
 
                 if not STOP_CRAWLE:
@@ -303,27 +312,27 @@ class ControlThread(threading.Thread):
                     STOP_CRAWLE = True
                 break
 
-            retryCount = 0
-            self.connectionControl.request(requestResponse)
-            self.handler.process(requestResponse, self.queue)
+            retry_count = 0
+            self.connection_control.request(request_response)
+            self.handler.process(request_response, self.queue)
 
             # Now release waiting threads
-            ControlThread.stopWaitEvent.set()            
+            ControlThread.stop_wait_event.set()            
 
 
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, queue, numThreads=1):
+    def __init__(self, handler, queue, num_threads=1):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         queue -- The handle the the queue class
-        numThreads -- The number of threads to spwan (Default 1)
+        num_threads -- The number of threads to spwan (Default 1)
         """
         self.threads = []
-        self.connectionCtrl = HTTPConnectionControl(handler=handler)
+        self.connection_ctrl = HTTPConnectionControl(handler=handler)
         self.handler = handler
         # HACK AROUND THIS FOR NOW
         global STOP_CRAWLE
@@ -331,9 +340,9 @@ class Controller(object):
 
         ControlThread.EMPTY_QUEUE_RETRYS = 1
 
-        for x in range(numThreads):
+        for _ in range(num_threads):
             thread = ControlThread(handler=handler, queue=queue,
-                                   connectionControl=self.connectionCtrl)
+                                   connection_control=self.connection_ctrl)
             self.threads.append(thread)
 
     def start(self):
@@ -364,6 +373,7 @@ class Controller(object):
         self.join()
 
     def crawl_finished(self):
+        """Indicates the the crawl has completed."""
         return STOP_CRAWLE
 
 
@@ -374,6 +384,7 @@ class VisitURLHandler(Handler):
     """
 
     def process(self, info, queue):
+        """Puts item back on the queue if the request was no successful."""
         if info['status'] != 200:
             print "putting %s back on queue" % info['url']
             queue.put(info['url'])
@@ -385,16 +396,18 @@ class CrawlQueue(object):
 
     def get(self):
         """The get function must return a RequestResponse object."""
-        raise "CrawlQueue.get() needs to be implemented"
+        raise NotImplementedError("CrawlQueue.get() must be implemented")
     
-    def put(self, queueItem):
-        raise "CrawlQueue.put(queue_item) needs to be implemented"
+    def put(self, queue_item):
+        """The put function should put the queue_item back on the queue."""
+        assert queue_item # pychecker hack
+        raise NotImplementedError("CrawlQueue.put(...) must be implemented")
 
 class URLQueue(CrawlQueue):
     """URLQueue is the most basic queue type and is all that is needed for
     most situations. Simply, it queues full urls."""
 	
-    def __init__(self, seedfile=None):
+    def __init__(self, seed_file=None):
         """Sets up the URLQueue by creating a queue.
         
         Keyword arguments:
@@ -402,45 +415,45 @@ class URLQueue(CrawlQueue):
         """
         self.queue = Queue.Queue(0)
         self.lock = threading.Lock()
-        self.startTime = self.blockTime = None
-        self.totalItems = 0
+        self.start_time = self.block_time = None
+        self.total_items = 0
 
         # Add seeded items to the queue
-        if seedfile:
+        if seed_file:
             try:
-                file = open(seedfile)
+                fp = open(seed_file)
             except:
-                raise "Could not open seed file"
+                raise Exception("Could not open seed file")
             count = 0
-            for line in file:
+            for line in fp:
                 self.queue.put(line.strip())
                 count += 1
-            file.close()
+            fp.close()
             print "Queued:", count
         else:
             print "Starting with empty queue"
 
-    def save(self, file):
+    def save(self, save_file):
         """Outputs queue to file specified. On error prints queue to screen."""
         try:
-            file = open(file, 'w')
+            fp = open(save_file, 'w')
         except:
             sys.stderr.write(' '.join(('Could not open file for saving.',
                                        'Printing to screen.\n')))
             sys.stderr.flush()
-            file = sys.stdout
+            fp = sys.stdout
 
         items = 0
         while not self.queue.empty():
             try:
                 item = self.queue.get(block=False)
-                file.write("%s\n" % item)
+                fp.write("%s\n" % item)
                 items += 1
             except Queue.Empty:
                 print "Saving the queue is not atomic, FIXY TIME"
 
-        if file != sys.stdout:
-            file.close()
+        if fp != sys.stdout:
+            fp.close()
 
         print "Saved %d items." % items
 
@@ -449,26 +462,27 @@ class URLQueue(CrawlQueue):
         try:
             url = self.queue.get(block=False)
             self.lock.acquire()
-            self.totalItems += 1
-            if self.startTime == None:
-                self.startTime = self.blockTime = time.time()
-            elif self.totalItems % 1000 == 0:
+            self.total_items += 1
+            if self.start_time == None:
+                self.start_time = self.block_time = time.time()
+            elif self.total_items % 1000 == 0:
                 now = time.time()
                 print 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)' % (
-                    self.totalItems, self.queue.qsize(),
-                    1000 / (now - self.blockTime),
-                    self.totalItems / (now - self.startTime))
-                self.blockTime = now
+                    self.total_items, self.queue.qsize(),
+                    1000 / (now - self.block_time),
+                    self.total_items / (now - self.start_time))
+                self.block_time = now
             self.lock.release()
             return RequestResponse(url)
         except Queue.Empty:
             return None
 
     def put(self, url):
+        """Puts the item back on the queue."""
         self.queue.put(url)
 
 
-def runCrawle(argv, handler):
+def run_crawle(argv, handler):
     """The typical way to start CRAWL-E"""
     try:
         threads = int(argv[1])
@@ -477,22 +491,21 @@ def runCrawle(argv, handler):
         sys.exit(1)
 
     try:
-        seedfile = argv[2]
+        seed_file = argv[2]
     except:
-        seedfile = None
+        seed_file = None
 
-    queueHandler = URLQueue(seedfile)
+    queue_handler = URLQueue(seed_file)
 
-    controller = Controller(handler=handler, queue=queueHandler,
-                            numThreads=threads)
+    controller = Controller(handler=handler, queue=queue_handler,
+                            num_threads=threads)
     controller.start()
     try:
         controller.join()
     except KeyboardInterrupt:
         controller.stop()
-    queueHandler.save(seedfile)
-
+    queue_handler.save(seed_file)
 
 if __name__ == '__main__':
     """Basic example of how to start CRAWL-E."""
-    runCrawle(sys.argv, handler=VisitURLHandler())
+    run_crawle(sys.argv, handler=VisitURLHandler())

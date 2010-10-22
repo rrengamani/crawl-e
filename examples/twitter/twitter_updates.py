@@ -39,39 +39,39 @@ class TwitterHandler(crawle.Handler):
         rr = crawle.RequestResponse(self.LOGIN_POST_URL, method='POST',
                                     params=params, redirects=None)
         cc.request(rr)
-        if rr.responseStatus != 302:
+        if rr.response_status != 302:
             return False
-        match = self.TWITTER_SESS_RE.search(rr.responseHeaders['set-cookie'])
+        match = self.TWITTER_SESS_RE.search(rr.response_headers['set-cookie'])
         if not match or len(match.groups()) != 1:
             return False
         self.session = match.group(1)
         return True
 
-    def preProcess(self, reqRes):
+    def pre_process(self, req_res):
         self.lock.acquire()
         if self.session:
-            reqRes.requestHeaders = {'cookie':self.session}
+            req_res.request_headers = {'cookie':self.session}
         self.lock.release()
 
-    def process(self, reqRes, queue):
-        if reqRes.responseStatus != 200:
-            print "%d - putting %s back on queue" % (reqRes.responseStatus,
-                                                     reqRes.responseURL)
-            queue.put(reqRes.responseURL)
+    def process(self, req_res, queue):
+        if req_res.response_status != 200:
+            print "%d - putting %s back on queue" % (req_res.response_status,
+                                                     req_res.response_url)
+            queue.put(req_res.response_url)
             return
 
         # Test if a login is required, if so login then readd the request URL
-        if reqRes.responseURL == self.LOGIN_PAGE_URL:
+        if req_res.response_url == self.LOGIN_PAGE_URL:
             self.lock.acquire()
-            login_status = self.login(reqRes.responseBody)
+            login_status = self.login(req_res.response_body)
             self.lock.release()
             if login_status:
-                queue.put(reqRes.requestURL)
+                queue.put(req_res.request_url)
             else:
                 print 'Login failed'
             return
 
-        print reqRes.responseBody
+        print req_res.response_body
         return				
 
     def stop(self):
@@ -86,7 +86,7 @@ if __name__ == '__main__':
     queue = crawle.URLQueue()
     queue.queue.put('http://twitter.com/following')
     controller = crawle.Controller(handler=twitter_handler, queue=queue,
-                                   numThreads=1)
+                                   num_threads=1)
     controller.start()
     try:
         controller.join()
