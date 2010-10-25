@@ -3,7 +3,7 @@
 import gzip, httplib, resource, socket, sys, threading, time, urllib, urlparse
 import cStringIO, Queue
 
-CONNECTION_TIMEOUT = 30
+DEFAULT_SOCKET_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
 STOP_CRAWLE = False
 
@@ -99,8 +99,8 @@ class HTTPConnectionQueue(object):
         self.connections = 0
         self.max_conn = max_conn
 
-    def __del__(self):
-        """Destroys the HTTPConnectionQueue object."""
+    def destroy(self):
+        """Destroy the HTTPConnectionQueue object."""
         try:
             while True:
                 connection = self.queue.get(block=False)
@@ -160,11 +160,11 @@ class QueueNode(object):
             self.next.prev = self
         self.prev = None
 
-    def __del__(self):
-        """Properly destruct the node"""
+    def remove(self):
+        """Properly remove the node"""
         if self.prev:
             self.prev.next = None
-        del self.connection_queue
+        self.connection_queue.destroy()
 
 class CQueueLRU(object):
     """This class manages a least recently used list with dictionary lookup."""
@@ -226,7 +226,7 @@ class CQueueLRU(object):
                     self.newest = None
                 del self.table[self.oldest.key]
                 prev = self.oldest.prev
-                del self.oldest
+                self.oldest.remove()
                 self.oldest = prev
             connection_queue = HTTPConnectionQueue(*key,
                                                     max_conn=self.max_conn)
@@ -245,9 +245,8 @@ class HTTPConnectionControl(object):
     this class handles resetting the connection when it reaches a specified
     request limit.
     """
-    socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, max_queues=None, max_conn=None):
+    def __init__(self, handler, max_queues=None, max_conn=None, timeout=None):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
@@ -256,7 +255,9 @@ class HTTPConnectionControl(object):
         max_queues -- The maximum number of connection_queues to maintain.
         max_conn -- The maximum number of connections (sockets) allowed for a
                     given connection_queue.
+        timeout -- The socket timeout value.
         """
+        socket.setdefaulttimeout(timeout)
         self.cq_lru = CQueueLRU(max_queues, max_conn)
         self.handler = handler
 
@@ -395,18 +396,22 @@ class ControlThread(threading.Thread):
 class Controller(object):
     """The primary controller manages all the threads."""
 	
-    def __init__(self, handler, queue, num_threads=1):
+    def __init__(self, handler, queue, num_threads=1,
+                 timeout=DEFAULT_SOCKET_TIMEOUT):
         """Create the controller object
 
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         queue -- The handle the the queue class
         num_threads -- The number of threads to spawn (Default 1)
+        timeout -- The socket timeout time
         """
-        queues = resource.getrlimit(resource.RLIMIT_NOFILE)[0] / num_threads
+        nofiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        queues = nofiles * 2 / (num_threads * 3)
         self.connection_ctrl = HTTPConnectionControl(handler=handler,
                                                      max_queues=queues,
-                                                     max_conn=num_threads)
+                                                     max_conn=num_threads,
+                                                     timeout=timeout)
         self.handler = handler
         # HACK AROUND THIS FOR NOW
         global STOP_CRAWLE

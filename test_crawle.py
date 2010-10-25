@@ -150,7 +150,7 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
-        self.cc = crawle.HTTPConnectionControl(crawle.Handler())
+        self.cc = crawle.HTTPConnectionControl(crawle.Handler(), timeout=1)
 
     def testRequestSTOP_CRAWLE(self):
         crawle.STOP_CRAWLE = True
@@ -251,6 +251,10 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.assertTrue(''.join(['<p>First name: "CRAWL-E"</p>',
                                  '<p>Last name: "POST_TEST"</p>'])
                         in rr.response_body)
+
+    def testConnectionTimeout(self):
+        rr = crawle.RequestResponse('http://4.4.4.4')
+        self.assertRaises(socket.timeout, self.cc.request, rr)
 
 
 class TestController(unittest.TestCase):
