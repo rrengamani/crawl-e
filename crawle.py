@@ -1,7 +1,7 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
-import gzip, httplib, socket, sys, threading, time, urllib, urlparse
-import cStringIO, Queue #resource
+import gzip, httplib, resource, socket, sys, threading, time, urllib, urlparse
+import cStringIO, Queue
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -37,18 +37,13 @@ class Handler(object):
 
 class RequestResponse(object):
     """This class is a container for information pertaining to requests and
-    responses.
-
-    Attributes:
-    	redirects	- None if request should not redirect, otherwise a
-			  number > 0 to indicate how many redirects to support.
-    """
+    responses."""
 
     def __init__(self, url, headers=None, method='GET', params=None,
                  redirects=10):
         """Constructs a RequestResponse object.
         
-        KeyWord Arguments:
+        Keyword Arguments:
         url -- The url to request.
         headers -- The http request headers.
         method -- The http request method.
@@ -90,16 +85,19 @@ class HTTPConnectionQueue(object):
         connection.request_count = 0
         return connection
 
-    def __init__(self, address, encrypted=False):
+    def __init__(self, address, encrypted=False, max_conn=None):
         """Constructs a HTTPConnectionQueue object.
 
         Keyword Arguments:
         address -- The address for which this object maps to.
         encrypted -- Where or not the connection is encrypted.
+        max_conn -- The maximum number of connections to maintain
         """
         self.address = address
         self.encrypted = encrypted
         self.queue = Queue.Queue(0)
+        self.connections = 0
+        self.max_conn = max_conn
 
     def __del__(self):
         """Destroys the HTTPConnectionQueue object."""
@@ -109,7 +107,7 @@ class HTTPConnectionQueue(object):
                 connection.close()
         except Queue.Empty: pass
 
-    def get_connection(self):
+    def get(self):
         """Return a HTTP(S)Connection object for the appropriate address.
         
         First try to return the object from the queue, however if the queue
@@ -120,9 +118,10 @@ class HTTPConnectionQueue(object):
         """
         try:
             connection = self.queue.get(block=False)
+            self.connections -= 1
             """Reset the connection if exceeds request limit"""
-            if self.REQUEST_LIMIT and \
-                    connection.request_count >= self.REQUEST_LIMIT:
+            if (self.REQUEST_LIMIT and
+                connection.request_count >= self.REQUEST_LIMIT):
                 connection.close()
                 connection = HTTPConnectionQueue.connection_object(
                     self.address, self.encrypted)
@@ -131,13 +130,18 @@ class HTTPConnectionQueue(object):
                                                                self.encrypted)
         return connection
 
-    def put_connection(self, connection):
+    def put(self, connection):
         """Put the HTTPConnection object back on the queue."""
         connection.request_count += 1
-        self.queue.put(connection)
+        if self.max_conn != None and self.connections + 1 > self.max_conn:
+            connection.close()
+        else:
+            self.queue.put(connection)
+            self.connections += 1
+
 
 class QueueNode(object):
-    """This class handles an individual node in the CQueueLUR."""
+    """This class handles an individual node in the CQueueLRU."""
 
     def __init__(self, connection_queue, key, next=None):
         """Construct a QueueNode object.
@@ -165,7 +169,7 @@ class QueueNode(object):
 class CQueueLRU(object):
     """This class manages a least recently used list with dictionary lookup."""
 
-    def __init__(self, max_queues, max_conn):
+    def __init__(self, max_queues=None, max_conn=None):
         """Construct a CQueueLRU object.
 
         Keyword Arguments:
@@ -189,7 +193,7 @@ class CQueueLRU(object):
         """
         self.lock.acquire()
         if key in self.table:
-            connection = self.table[key].connection_queue.get_connection()
+            connection = self.table[key].connection_queue.get()
         else:
             connection = HTTPConnectionQueue.connection_object(*key)
         self.lock.release()
@@ -216,20 +220,22 @@ class CQueueLRU(object):
                 self.newest = node.next.prev = node
         else:
             # delete the oldest while too many
-            while len(self.table) + 1 > self.max_queues:
+            while (self.max_queues != None and
+                   len(self.table) + 1 > self.max_queues):
                 if self.oldest == self.newest:
                     self.newest = None
                 del self.table[self.oldest.key]
                 prev = self.oldest.prev
                 del self.oldest
                 self.oldest = prev
-            connection_queue = HTTPConnectionQueue(*key)
+            connection_queue = HTTPConnectionQueue(*key,
+                                                    max_conn=self.max_conn)
             node = QueueNode(connection_queue, key, self.newest)
             self.newest = node
             if not self.oldest:
                 self.oldest = node
             self.table[key] = node
-        node.connection_queue.put_connection(connection)
+        node.connection_queue.put(connection)
         self.lock.release()
 
 
@@ -241,7 +247,7 @@ class HTTPConnectionControl(object):
     """
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler, max_queues, max_conn):
+    def __init__(self, handler, max_queues=None, max_conn=None):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
@@ -310,8 +316,8 @@ class HTTPConnectionControl(object):
             req_res.response_time = response_time
             req_res.response_status = response.status
             req_res.response_headers = dict(response.getheaders())
-            if 'content-encoding' in req_res.response_headers and \
-                    req_res.response_headers['content-encoding'] == 'gzip':
+            if ('content-encoding' in req_res.response_headers and
+                req_res.response_headers['content-encoding'] == 'gzip'):
                 temp = gzip.GzipFile(fileobj=cStringIO.StringIO(response_body))
                 req_res.response_body = temp.read()
                 temp.close()
@@ -397,10 +403,9 @@ class Controller(object):
         queue -- The handle the the queue class
         num_threads -- The number of threads to spawn (Default 1)
         """
-        self.threads = []
-        #print resource.get_rlimit(resource.NO_FILES)
+        queues = resource.getrlimit(resource.RLIMIT_NOFILE)[0] / num_threads
         self.connection_ctrl = HTTPConnectionControl(handler=handler,
-                                                     max_queues=1,
+                                                     max_queues=queues,
                                                      max_conn=num_threads)
         self.handler = handler
         # HACK AROUND THIS FOR NOW
@@ -409,6 +414,7 @@ class Controller(object):
 
         ControlThread.EMPTY_QUEUE_RETRYS = 1
 
+        self.threads = []
         for _ in range(num_threads):
             thread = ControlThread(handler=handler, queue=queue,
                                    connection_control=self.connection_ctrl)
