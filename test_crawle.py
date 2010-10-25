@@ -1,6 +1,109 @@
 #!/usr/bin/env python
 import crawle, socket, unittest
 
+class TestCQueueLRU(unittest.TestCase):
+    ADDRESS_0 = (('127.0.0.1', 80), False)
+    ADDRESS_1 = (('127.0.0.1', 443), True)
+    ADDRESS_2 = (('127.0.0.1', 8080), False)
+
+    def setUp(self):
+        self.lru = crawle.CQueueLRU(10, 10)
+
+    def assert_newest(self, key):
+        self.assertEqual(self.lru.table[key], self.lru.newest)
+        self.assertEqual(None, self.lru.newest.prev)
+
+    def assert_oldest(self, key):
+        self.assertEqual(self.lru.table[key], self.lru.oldest)
+        self.assertEqual(None, self.lru.oldest.next)
+
+    def testGetSingleItem(self):
+        item = self.lru[self.ADDRESS_0]
+        self.assertEqual(None, self.lru.newest)
+        self.assertEqual(None, self.lru.oldest)
+
+    def testPutSingleItem(self):
+        item = self.lru[self.ADDRESS_0]
+        self.lru[self.ADDRESS_0] = item
+        self.assertEqual(1, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_0)
+        self.assert_oldest(self.ADDRESS_0)
+
+    def testReAddSingleItem(self):
+        item = self.lru[self.ADDRESS_0]
+        self.lru[self.ADDRESS_0] = item
+        again = self.lru[self.ADDRESS_0]
+        self.assertEqual(again, item)
+        self.lru[self.ADDRESS_0] = again
+        self.assertEqual(1, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_0)
+        self.assert_oldest(self.ADDRESS_0)
+
+    def testPutDoubleItemLimit1(self):
+        self.lru.max_queues = 1
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.assertEqual(1, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_1)
+        self.assert_oldest(self.ADDRESS_1)
+
+    def testPutDoubleItemLimitN(self):
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.assertEqual(2, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_1)
+        self.assert_oldest(self.ADDRESS_0)
+
+    def testReAddFirstOfDoubleItemLimitN(self):
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.lru[self.ADDRESS_0] = item0
+        self.assertEqual(2, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_0)
+        self.assert_oldest(self.ADDRESS_1)
+
+    def testReAddSecondOfDoubleItemLimitN(self):
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.lru[self.ADDRESS_1] = item0
+        self.assertEqual(2, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_1)
+        self.assert_oldest(self.ADDRESS_0)
+
+    def testPutTripleItemLimitN(self):
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        item2 = self.lru[self.ADDRESS_2]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.lru[self.ADDRESS_2] = item2
+        self.assertEqual(3, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_2)
+        self.assert_oldest(self.ADDRESS_0)
+
+    def testRAddMiddleOfTripleItemLimitN(self):
+        item0 = self.lru[self.ADDRESS_0]
+        item1 = self.lru[self.ADDRESS_1]
+        item2 = self.lru[self.ADDRESS_2]
+        self.lru[self.ADDRESS_0] = item0
+        self.lru[self.ADDRESS_1] = item1
+        self.lru[self.ADDRESS_2] = item2
+        self.lru[self.ADDRESS_1] = item1
+        self.assertEqual(3, len(self.lru.table))
+        self.assert_newest(self.ADDRESS_1)
+        self.assert_oldest(self.ADDRESS_0)
+        self.assertEqual(self.lru.newest, self.lru.oldest.prev.prev)
+        self.assertEqual(self.lru.oldest, self.lru.newest.next.next)
+
+
 class TestHTTPConnectionQueue(unittest.TestCase):
     def setUp(self):
         address = (socket.gethostbyname('127.0.0.1'), 80, 'http')
@@ -38,7 +141,7 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 
 class TestHTTPConnectionControl(unittest.TestCase):
     def setUp(self):
-        self.cc = crawle.HTTPConnectionControl(crawle.Handler())
+        self.cc = crawle.HTTPConnectionControl(crawle.Handler(), 1, 1)
 
     def testRequestSTOP_CRAWLE(self):
         crawle.STOP_CRAWLE = True
@@ -72,8 +175,6 @@ class TestHTTPConnectionControl(unittest.TestCase):
             self.fail('Did not raise invalid hostname exception')
         except socket.gaierror, e:
             self.assertEqual(-5, e.errno)
-        except socket.error, e:
-            self.assertEqual('OPENDNS Non-existent domain', e.args[0])
 
     def testRequestInvalidURL(self):
         urls = ['invalid', 'http:///invalid', 'httpz://google.com']

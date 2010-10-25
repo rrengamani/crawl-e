@@ -1,7 +1,7 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
-import cStringIO, gzip, httplib, socket, sys, threading, time, urllib, urlparse
-import Queue
+import gzip, httplib, socket, sys, threading, time, urllib, urlparse
+import cStringIO, Queue #resource
 
 CONNECTION_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
@@ -56,12 +56,12 @@ class RequestResponse(object):
         redirects -- The maximum number of redirects to follow.
         """
         self.error = None
+        self.redirects = redirects
 
         self.request_headers = headers
         self.request_url = url
         self.request_method = method
         self.request_params = params
-        self.redirects = redirects
 
         self.response_status = None
         self.response_url = url
@@ -74,11 +74,21 @@ class HTTPConnectionQueue(object):
     """This class handles the queue of sockets for a particular address.
 
     This essentially is a queue of socket objects which also adds a transparent
-    field to each connection object which is the requestCount. When the
-    requestCount exceeds the REQUEST_LIMIT the connection is automatically
+    field to each connection object which is the request_count. When the
+    request_count exceeds the REQUEST_LIMIT the connection is automatically
     reset.
     """
     REQUEST_LIMIT = None
+
+    @staticmethod
+    def connection_object(address, encrypted):
+        """Very simply return a HTTP(S)Connection object."""
+        if encrypted:
+            connection = httplib.HTTPSConnection(*address)
+        else:
+            connection = httplib.HTTPConnection(*address)
+        connection.request_count = 0
+        return connection
 
     def __init__(self, address, encrypted=False):
         """Constructs a HTTPConnectionQueue object.
@@ -90,6 +100,14 @@ class HTTPConnectionQueue(object):
         self.address = address
         self.encrypted = encrypted
         self.queue = Queue.Queue(0)
+
+    def __del__(self):
+        """Destroys the HTTPConnectionQueue object."""
+        try:
+            while True:
+                connection = self.queue.get(block=False)
+                connection.close()
+        except Queue.Empty: pass
 
     def get_connection(self):
         """Return a HTTP(S)Connection object for the appropriate address.
@@ -106,23 +124,113 @@ class HTTPConnectionQueue(object):
             if self.REQUEST_LIMIT and \
                     connection.request_count >= self.REQUEST_LIMIT:
                 connection.close()
-                if self.encrypted:
-                    connection = httplib.HTTPSConnection(*self.address)
-                else:
-                    connection = httplib.HTTPConnection(*self.address)
-                connection.request_count = 0
+                connection = HTTPConnectionQueue.connection_object(
+                    self.address, self.encrypted)
         except Queue.Empty:
-            if self.encrypted:
-                connection = httplib.HTTPSConnection(*self.address)
-            else:
-                connection = httplib.HTTPConnection(*self.address)
-            connection.request_count = 0
+            connection = HTTPConnectionQueue.connection_object(self.address,
+                                                               self.encrypted)
         return connection
 
     def put_connection(self, connection):
         """Put the HTTPConnection object back on the queue."""
         connection.request_count += 1
         self.queue.put(connection)
+
+class QueueNode(object):
+    """This class handles an individual node in the CQueueLUR."""
+
+    def __init__(self, connection_queue, key, next=None):
+        """Construct a QueueNode object.
+
+        Keyword Arguments:
+        connection_queue -- The ConnectionQueue object.
+        key -- The unique identifier that allows one to perform a reverse
+               lookup in the hash table.
+        next -- The previous least recently used item.
+        """
+        
+        self.connection_queue = connection_queue
+        self.key = key
+        self.next = next
+        if next:
+            self.next.prev = self
+        self.prev = None
+
+    def __del__(self):
+        """Properly destruct the node"""
+        if self.prev:
+            self.prev.next = None
+        del self.connection_queue
+
+class CQueueLRU(object):
+    """This class manages a least recently used list with dictionary lookup."""
+
+    def __init__(self, max_queues, max_conn):
+        """Construct a CQueueLRU object.
+
+        Keyword Arguments:
+        max_queues -- The maximum number of unique queues to manage. When only
+                      crawling a single domain, one should be sufficient.
+        max_conn -- The maximum number of connections that may persist within
+                    a single ConnectionQueue.
+        """
+
+        self.lock = threading.Lock()
+        self.max_queues = max_queues
+        self.max_conn = max_conn
+        self.table = {}
+        self.newest = None
+        self.oldest = None
+
+    def __getitem__(self, key):
+        """Return either a HTTP(S)Connection object.
+
+        Fetches an already utilized object if one exists.
+        """
+        self.lock.acquire()
+        if key in self.table:
+            connection = self.table[key].connection_queue.get_connection()
+        else:
+            connection = HTTPConnectionQueue.connection_object(*key)
+        self.lock.release()
+        return connection
+
+    def __setitem__(self, key, connection):
+        """Store the HTTP(S)Connection object.
+
+        This function ensures that there are at most max_queues. In the event
+        there are too many, the oldest inactive queues will be deleted.
+        """
+        self.lock.acquire()
+        if key in self.table:
+            node = self.table[key]
+            # move the node to the head of the list
+            if self.newest != node:
+                node.prev.next = node.next
+                if self.oldest != node:
+                    node.next.prev = node.prev
+                else:
+                    self.oldest = node.prev
+                node.prev = None
+                node.next = self.newest
+                self.newest = node.next.prev = node
+        else:
+            # delete the oldest while too many
+            while len(self.table) + 1 > self.max_queues:
+                if self.oldest == self.newest:
+                    self.newest = None
+                del self.table[self.oldest.key]
+                prev = self.oldest.prev
+                del self.oldest
+                self.oldest = prev
+            connection_queue = HTTPConnectionQueue(*key)
+            node = QueueNode(connection_queue, key, self.newest)
+            self.newest = node
+            if not self.oldest:
+                self.oldest = node
+            self.table[key] = node
+        node.connection_queue.put_connection(connection)
+        self.lock.release()
 
 
 class HTTPConnectionControl(object):
@@ -133,15 +241,17 @@ class HTTPConnectionControl(object):
     """
     socket.setdefaulttimeout(CONNECTION_TIMEOUT)
 
-    def __init__(self, handler):
+    def __init__(self, handler, max_queues, max_conn):
         """Constructs the HTTPConnection Control object. These objects are to
         be shared between each thread.
 
         Keyword Arguments:
         handler -- The Handler class for checking if a url is valid.
+        max_queues -- The maximum number of connection_queues to maintain.
+        max_conn -- The maximum number of connections (sockets) allowed for a
+                    given connection_queue.
         """
-        self.connection_queues = {}
-        self.lock = threading.Lock()
+        self.cq_lru = CQueueLRU(max_queues, max_conn)
         self.handler = handler
 
     def request(self, req_res):
@@ -158,8 +268,6 @@ class HTTPConnectionControl(object):
             raise Exception('Invalid URL scheme')
 
         address = socket.gethostbyname(u.hostname), u.port
-        if address == ('67.215.65.132', None):
-            raise socket.error('OPENDNS Non-existent domain')
         encrypted = u.scheme == 'https'
 
         request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
@@ -172,14 +280,7 @@ class HTTPConnectionControl(object):
         if 'Accept-Encoding' not in headers:
             headers['Accept-Encoding'] = 'gzip'
 
-        self.lock.acquire()
-        try:
-            connection_queue = self.connection_queues[address]
-        except:
-            connection_queue = HTTPConnectionQueue(address, encrypted)
-            self.connection_queues[address] = connection_queue
-        self.lock.release()
-        connection = connection_queue.get_connection()
+        connection = self.cq_lru[(address, encrypted)]
             
         try:
             start = time.time()
@@ -192,7 +293,7 @@ class HTTPConnectionControl(object):
             response = connection.getresponse()
             response_time = time.time() - start
             response_body = response.read()
-            connection_queue.put_connection(connection)
+            self.cq_lru[(address, encrypted)] = connection
         except Exception:
             connection.close()
             raise
@@ -294,10 +395,13 @@ class Controller(object):
         Keyword Arguments:
         handler -- The Handler class each thread will use for processing
         queue -- The handle the the queue class
-        num_threads -- The number of threads to spwan (Default 1)
+        num_threads -- The number of threads to spawn (Default 1)
         """
         self.threads = []
-        self.connection_ctrl = HTTPConnectionControl(handler=handler)
+        #print resource.get_rlimit(resource.NO_FILES)
+        self.connection_ctrl = HTTPConnectionControl(handler=handler,
+                                                     max_queues=1,
+                                                     max_conn=num_threads)
         self.handler = handler
         # HACK AROUND THIS FOR NOW
         global STOP_CRAWLE
@@ -387,7 +491,7 @@ class URLQueue(CrawlQueue):
         if seed_file:
             try:
                 fp = open(seed_file)
-            except:
+            except IOError:
                 raise Exception("Could not open seed file")
             count = 0
             for line in fp:
@@ -402,7 +506,7 @@ class URLQueue(CrawlQueue):
         """Outputs queue to file specified. On error prints queue to screen."""
         try:
             fp = open(save_file, 'w')
-        except:
+        except IOError:
             sys.stderr.write(' '.join(('Could not open file for saving.',
                                        'Printing to screen.\n')))
             sys.stderr.flush()
@@ -451,13 +555,13 @@ def run_crawle(argv, handler):
     """The typical way to start CRAWL-E"""
     try:
         threads = int(argv[1])
-    except:
+    except (IndexError, ValueError):
         sys.stderr.write("Usage: %s threads [seedfile]\n" % argv[0])
         sys.exit(1)
 
     try:
         seed_file = argv[2]
-    except:
+    except IndexError:
         seed_file = None
 
     queue_handler = URLQueue(seed_file)
