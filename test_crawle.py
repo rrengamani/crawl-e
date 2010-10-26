@@ -153,24 +153,17 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.cc = crawle.HTTPConnectionControl(crawle.Handler(), timeout=1)
 
     def testRequestSTOP_CRAWLE(self):
-        crawle.STOP_CRAWLE = True
-        rr = crawle.RequestResponse('')
         try:
-            self.cc.request(rr)
-            self.fail('Did not raise CRAWL-E Stopped exception.')
-        except Exception, e:
-            self.assertEqual('CRAWL-E Stopped', e.args[0])
+            crawle.STOP_CRAWLE = True
+            rr = crawle.RequestResponse('')
+            self.assertRaises(crawle.CrawleStopped, self.cc.request, rr)
         finally:
             crawle.STOP_CRAWLE = False
 
     def testRequestPreProcess(self):
         rr = crawle.RequestResponse('http://google.com')
         self.cc.handler = PreProcessFailHandler()
-        try:
-            self.cc.request(rr)
-            self.fail('Did not raise Aborted in pre_process exception.')
-        except Exception, e:
-            self.assertEqual('Aborted in pre_process', e.args[0])
+        self.assertRaises(crawle.CrawleRequestAborted, self.cc.request, rr)
 
     def testRequestInvalidMethod(self):
         rr = crawle.RequestResponse('http://www.google.com', method='INVALID')
@@ -189,11 +182,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
         urls = ['invalid', 'http:///invalid', 'httpz://google.com']
         for url in urls:
             rr = crawle.RequestResponse(url)
-            try:
-                self.cc.request(rr)
-                self.fail('Did not raise Invalid URL exception.')
-            except Exception, e:
-                self.assertEqual('Invalid URL scheme', e.args[0])
+            self.assertRaises(crawle.CrawleUnsupportedScheme, self.cc.request, rr)
 
     def testRequest301(self):
         rr = crawle.RequestResponse('http://google.com', redirects=None)
@@ -204,11 +193,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
 
     def testRequestRedirectExceeded(self):
         rr = crawle.RequestResponse('http://google.com', redirects=0)
-        try:
-            self.cc.request(rr)
-            self.fail('Did not raise redirect count exceeeded exception.')
-        except Exception, e:
-            self.assertEqual('Redirect count exceeded', e.args[0])
+        self.assertRaises(crawle.CrawleRedirectsExceeded, self.cc.request, rr)
 
     def testRequestSuccessfulRedirect(self):
         rr = crawle.RequestResponse('http://google.com', redirects=1)

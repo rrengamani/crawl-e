@@ -7,6 +7,18 @@ DEFAULT_SOCKET_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
 STOP_CRAWLE = False
 
+class CrawleException(Exception):
+    """Base Crawle exception class."""
+class CrawleRequestAborted(CrawleException):
+    """Exception raised when the handler pre_process function sets the
+    response_url to None to indicate not to visit the URL."""
+class CrawleStopped(CrawleException):
+    """Exception raised when the crawler is stopped."""
+class CrawleUnsupportedScheme(CrawleException):
+    """Exception raised when the url does not start with "http" or "https"."""
+class CrawleRedirectsExceeded(CrawleException):
+    """Exception raised when the number of redirects exceeds the limit."""
+
 class Handler(object):
     """An _abstract_ class for handling what urls to retrieve and how to
     parse and save them. The functions of this class need to be designed in
@@ -264,15 +276,15 @@ class HTTPConnectionControl(object):
     def request(self, req_res):
         """Handles the request to the server."""
         if STOP_CRAWLE:
-            raise Exception('CRAWL-E Stopped')
+            raise CrawleStopped()
 
         self.handler.pre_process(req_res)
         if req_res.response_url == None:
-            raise Exception('Aborted in pre_process')
+            raise CrawleRequestAborted()
 
         u = urlparse.urlparse(req_res.response_url)
         if u.scheme not in ['http', 'https'] or u.netloc == '':
-            raise Exception('Invalid URL scheme')
+            raise CrawleUnsupportedScheme()
 
         address = socket.gethostbyname(u.hostname), u.port
         encrypted = u.scheme == 'https'
@@ -307,7 +319,7 @@ class HTTPConnectionControl(object):
 
         if response.status in (301, 302, 303) and req_res.redirects != None:
             if req_res.redirects <= 0:
-                raise Exception('Redirect count exceeded')
+                raise CrawleRedirectsExceeded()
             req_res.redirects -= 1
             redirect_url = response.getheader('location')
             req_res.response_url = urlparse.urljoin(req_res.response_url,
