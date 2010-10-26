@@ -3,6 +3,9 @@
 import gzip, httplib, resource, socket, sys, threading, time, urllib, urlparse
 import cStringIO, Queue
 
+VERSION = '0.5'
+HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
+                   'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
 EMPTY_QUEUE_WAIT = 5
 STOP_CRAWLE = False
@@ -294,10 +297,17 @@ class HTTPConnectionControl(object):
             headers = req_res.request_headers
         else:
             headers = {}
-        if 'Host' not in headers:
-            headers['Host'] = u.hostname
+        if 'Accept' not in headers:
+            headers['Accept'] = HEADER_DEFAULTS['Accept']
         if 'Accept-Encoding' not in headers:
             headers['Accept-Encoding'] = 'gzip'
+        if 'Accept-Languge' not in headers:
+            headers['Accept-Language'] = HEADER_DEFAULTS['Accept-Language']
+        if 'Host' not in headers:
+            headers['Host'] = u.hostname
+        if 'User-Agent' not in headers:
+            headers['User-Agent'] = HEADER_DEFAULTS['User-Agent']
+
 
         connection = self.cq_lru[(address, encrypted)]
             
@@ -573,6 +583,12 @@ class URLQueue(CrawlQueue):
         """Puts the item back on the queue."""
         self.queue.put(url)
 
+def quick_request(url, redirects=30, timeout=30):
+    """Convenience function to quickly request a URL within CRAWl-E."""
+    cc = HTTPConnectionControl(Handler(), timeout=timeout)
+    rr = RequestResponse(url, redirects=redirects)
+    cc.request(rr)
+    return rr
 
 def run_crawle(argv, handler):
     """The typical way to start CRAWL-E"""
