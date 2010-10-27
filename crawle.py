@@ -1,7 +1,7 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
-import gzip, httplib, resource, socket, sys, threading, time, urllib, urlparse
-import cStringIO, Queue
+import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
+import threading, time, urllib, urlparse
 
 VERSION = '0.5'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
@@ -134,7 +134,7 @@ class HTTPConnectionQueue(object):
         try:
             connection = self.queue.get(block=False)
             self.connections -= 1
-            """Reset the connection if exceeds request limit"""
+            # Reset the connection if exceeds request limit
             if (self.REQUEST_LIMIT and
                 connection.request_count >= self.REQUEST_LIMIT):
                 connection.close()
@@ -380,10 +380,10 @@ class ControlThread(threading.Thread):
                 request_response = self.queue.get()
             except Exception, e:
                 if not STOP_CRAWLE:
-                    sys.stderr.write("Queue error - stopping CRAWL-E\n")
-                    sys.stderr.flush()
+                    sys.stdout.write('Queue error - stopping CRAWL-E\n')
+                    sys.stdout.flush()
                     STOP_CRAWLE = True
-                sys.stderr.write("%s: %s\n" % (str(type(e)), e.__str__()))
+                sys.stdout.write('%s: %s\n' % (str(type(e)), e.__str__()))
                 break
 
         # The thread notification needs to change a bit to take account of
@@ -400,7 +400,7 @@ class ControlThread(threading.Thread):
                     continue
 
                 if not STOP_CRAWLE:
-                    sys.stdout.write("Queue empty - stopping CRAWL-E\n")
+                    sys.stdout.write('Queue empty - stopping CRAWL-E\n')
                     sys.stdout.flush()
                     STOP_CRAWLE = True
                 break
@@ -461,16 +461,16 @@ class Controller(object):
                 if not thread.isAlive():
                     break
             count += 1
-            sys.stdout.write("%d threads closed\r" % count)
+            sys.stdout.write('%d threads closed\r' % count)
             sys.stdout.flush()
-        sys.stdout.write("                        \n")
+        sys.stdout.write('                        \n')
         sys.stdout.flush()
 
     def stop(self):
         """Stops all threads gracefully"""
         global STOP_CRAWLE
         STOP_CRAWLE = True
-        sys.stderr.write("Stop received\n")
+        sys.stderr.write('Stop received\n')
         sys.stderr.flush()
         self.join()
 
@@ -488,7 +488,7 @@ class VisitURLHandler(Handler):
     def process(self, info, queue):
         """Puts item back on the queue if the request was no successful."""
         if info['status'] != 200:
-            print "putting %s back on queue" % info['url']
+            print 'putting %s back on queue' % info['url']
             queue.put(info['url'])
 
 
@@ -498,17 +498,28 @@ class CrawlQueue(object):
 
     def get(self):
         """The get function must return a RequestResponse object."""
-        raise NotImplementedError("CrawlQueue.get() must be implemented")
+        raise NotImplementedError('CrawlQueue.get() must be implemented')
     
     def put(self, queue_item):
         """The put function should put the queue_item back on the queue."""
         assert queue_item # pychecker hack
-        raise NotImplementedError("CrawlQueue.put(...) must be implemented")
+        raise NotImplementedError('CrawlQueue.put(...) must be implemented')
 
 class URLQueue(CrawlQueue):
     """URLQueue is the most basic queue type and is all that is needed for
     most situations. Simply, it queues full urls."""
-	
+
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s') 
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.DEBUG)
+    sh.setFormatter(formatter)
+    logger = logging.getLogger('queue')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(sh)
+
+    LOG_AFTER = 1000
+    LOG_STRING = 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)'
+
     def __init__(self, seed_file=None):
         """Sets up the URLQueue by creating a queue.
         
@@ -525,39 +536,34 @@ class URLQueue(CrawlQueue):
             try:
                 fp = open(seed_file)
             except IOError:
-                raise Exception("Could not open seed file")
+                raise Exception('Could not open seed file')
             count = 0
             for line in fp:
                 self.queue.put(line.strip())
                 count += 1
             fp.close()
-            print "Queued:", count
+            URLQueue.logger.info('Queued: %d' % count)
         else:
-            print "Starting with empty queue"
+            URLQueue.logger.info('Starting with empty queue')
 
     def save(self, save_file):
         """Outputs queue to file specified. On error prints queue to screen."""
         try:
             fp = open(save_file, 'w')
         except IOError:
-            sys.stderr.write(' '.join(('Could not open file for saving.',
-                                       'Printing to screen.\n')))
-            sys.stderr.flush()
+            URLQueue.logger.warn('Could not open file for saving.')
             fp = sys.stdout
-
         items = 0
         while not self.queue.empty():
             try:
                 item = self.queue.get(block=False)
-                fp.write("%s\n" % item)
+                fp.write('%s\n' % item)
                 items += 1
             except Queue.Empty:
-                print "Saving the queue is not atomic, FIXY TIME"
-
+                URLQueue.logger.error('Queue is empty when it shouldn\'t be.')
         if fp != sys.stdout:
             fp.close()
-
-        print "Saved %d items." % items
+        URLQueue.logger.info('Saved %d items.' % items)
 
     def get(self):
         """Return url at the head of the queue or None if empty"""
@@ -567,12 +573,15 @@ class URLQueue(CrawlQueue):
             self.total_items += 1
             if self.start_time == None:
                 self.start_time = self.block_time = time.time()
-            elif self.total_items % 1000 == 0:
+            elif (URLQueue.LOG_AFTER and
+                  self.total_items % URLQueue.LOG_AFTER == 0):
                 now = time.time()
-                print 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)' % (
-                    self.total_items, self.queue.qsize(),
-                    1000 / (now - self.block_time),
-                    self.total_items / (now - self.start_time))
+                rps_now = URLQueue.LOG_AFTER / (now - self.block_time)
+                rps_avg = self.total_items / (now - self.start_time)
+                log = URLQueue.LOG_STRING % (self.total_items,
+                                             self.queue.qsize(), rps_now,
+                                             rps_avg)
+                URLQueue.logger.info(log)
                 self.block_time = now
             self.lock.release()
             return RequestResponse(url)
@@ -595,7 +604,7 @@ def run_crawle(argv, handler):
     try:
         threads = int(argv[1])
     except (IndexError, ValueError):
-        sys.stderr.write("Usage: %s threads [seedfile]\n" % argv[0])
+        sys.stdout.write('Usage: %s threads [seedfile]\n' % argv[0])
         sys.exit(1)
 
     try:

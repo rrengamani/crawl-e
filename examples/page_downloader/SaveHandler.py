@@ -39,4 +39,5 @@ class SaveURLHandler(crawle.Handler):
         self.output.close()
 
 if __name__ == '__main__':
+    crawle.URLQueue.LOG_AFTER = 1
     crawle.run_crawle(sys.argv, handler=SaveURLHandler('output.gz'))
