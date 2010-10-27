@@ -224,7 +224,16 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.assertEqual(200, rr.response_status)
         self.assertEqual(1, rr.redirects)
         self.assertTrue(rr.response_time > 0)
-        self.assertTrue('User-agent' in rr.response_body)
+        self.assertTrue('gzip' in  rr.response_headers['content-encoding'])
+
+    def testRequestGzipViaZcat(self):
+        rr = crawle.RequestResponse('http://www.eweek.com/', redirects=1)
+        self.cc.request(rr)
+        self.assertEqual(200, rr.response_status)
+        self.assertEqual(1, rr.redirects)
+        self.assertTrue(rr.response_time > 0)
+        self.assertTrue('gzip' in  rr.response_headers['content-encoding'])
+        self.assertTrue('Used zcat' in rr.extra)
 
     def testRequestPost(self):
         rr = crawle.RequestResponse(

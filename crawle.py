@@ -1,7 +1,7 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
 import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
-import threading, time, urllib, urlparse
+import subprocess, threading, time, urllib, urlparse
 
 VERSION = '0.5'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
@@ -67,6 +67,7 @@ class RequestResponse(object):
         """
         self.error = None
         self.redirects = redirects
+        self.extra = []
 
         self.request_headers = headers
         self.request_url = url
@@ -341,9 +342,22 @@ class HTTPConnectionControl(object):
             req_res.response_headers = dict(response.getheaders())
             if ('content-encoding' in req_res.response_headers and
                 req_res.response_headers['content-encoding'] == 'gzip'):
-                temp = gzip.GzipFile(fileobj=cStringIO.StringIO(response_body))
-                req_res.response_body = temp.read()
-                temp.close()
+                try:
+                    fileobj = cStringIO.StringIO(response_body)
+                    temp = gzip.GzipFile(fileobj=fileobj)
+                    req_res.response_body = temp.read()
+                    temp.close()
+                    fileobj.close()
+                except IOError:
+                    # HACK for pages that append plain text to gzip output
+                    sb = subprocess.Popen(['zcat'], stdin=subprocess.PIPE,
+                                          stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE)
+                    sb.stdin.write(response_body)
+                    sb.stdin.close()
+                    req_res.response_body = sb.stdout.read()
+                    del sb
+                    req_res.extra.append('Used zcat')
             else:
                 req_res.response_body = response_body
 
