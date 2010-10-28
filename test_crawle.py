@@ -176,7 +176,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
             self.cc.request(rr)
             self.fail('Did not raise invalid hostname exception')
         except socket.gaierror, e:
-            self.assertEqual(-5, e.errno)
+            self.assertTrue(e.errno in [-2, -5])
 
     def testRequestInvalidURL(self):
         urls = ['invalid', 'http:///invalid', 'httpz://google.com']
