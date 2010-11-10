@@ -3,7 +3,7 @@
 import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
 import subprocess, threading, time, urllib, urlparse
 
-VERSION = '0.5'
+VERSION = '0.6'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
@@ -467,7 +467,25 @@ class VisitURLHandler(Handler):
 
 
 class CrawlQueue(object):
+    """Crawl Queue is a mostly abstract concurrent Queue class.
+
+    Users of this class must implement their specific __init__, _get, and _put
+    functions both initialize their queue, get items from the queue, and put
+    items into the queue.
+
+    The CrawlQueue class takes care of concurrency issues, so that subclass
+    implementations can be assured atomic accesses to the user defined _get and
+    _put functions. As such both the user defined _get and _put functions
+    should be nonblocking.
+
+    In addition to assuring atomic access, the CrawlQueue class manages the
+    number of outstanding workers so that it only raises Queue.Empty when both
+    its queue it empty and there is no outstanding work.
+    """
+
     def __init__(self, single_threaded=False):
+        """Initializes the CrawlQueue class with a condition variable and
+        container for the numer of workers."""
         if not single_threaded:
             self._lock = threading.Lock()
             self.cv = threading.Condition(self._lock)
@@ -476,6 +494,11 @@ class CrawlQueue(object):
         self._workers = 0
 
     def get(self):
+        """The interface to obtaining an object from the queue.  This function
+        manages the concurrency and waits for more items if there is
+        outstanding work, otherwise it raises Queue.Empty. This class should
+        not be overwritten, but rather the user should write a _get class.
+        """
         while True:
             if self.cv:
                 self.cv.acquire()
@@ -496,18 +519,23 @@ class CrawlQueue(object):
                     self.cv.release()
 
     def put(self, item):
+        """The interface for putting an item on the queue. This function
+        manages concurrency and notifies other threads when an item is
+        added."""
         if self.cv:
             self.cv.acquire()
         try:
-            if item:
-                self._put(item)
-                if self.cv:
-                    self.cv.notify()
+            self._put(item)
+            if self.cv:
+                self.cv.notify()
         finally:
             if self.cv:
                 self.cv.release()
 
     def work_complete(self):
+        """Called by the ControlThread after the user defined handler has
+        returned thus indicating no more items will be added to the queue from
+        that thread before the next call to get."""
         if self.cv:
             self.cv.acquire()
         if self._workers > 0:
@@ -517,9 +545,11 @@ class CrawlQueue(object):
             self.cv.release()
 
     def _get(self):
+        """Function to be implemented by the user."""
         raise NotImplementedError('CrawlQueue._get() must be implemented')
 
     def _put(self, item):
+        """Function to be implemented by the user."""
         assert item # pychecker hack
         raise NotImplementedError('CrawlQueue._put(...) must be implemented')
 
