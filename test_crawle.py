@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import crawle, socket, unittest
+import Queue, crawle, socket, unittest
 
 ADDRESS_0 = ('127.0.0.1', 80), False
 ADDRESS_1 = ('127.0.0.1', 443), True
@@ -111,7 +111,7 @@ class TestHTTPConnectionQueue(unittest.TestCase):
     def testQueueLength(self):
         temp = self.cq.get()
         for i in range(5):
-            self.assertEqual(self.cq.queue.qsize(), i)
+            self.assertEqual(i, self.cq.queue.qsize())
             self.cq.put(temp)
 
     def testResetConnection(self):
@@ -120,21 +120,21 @@ class TestHTTPConnectionQueue(unittest.TestCase):
             crawle.HTTPConnectionQueue.REQUEST_LIMIT = 2
             a = self.cq.get()
             self.cq.put(a)
-            self.assertEqual(self.cq.get(), a)
+            self.assertEqual(a, self.cq.get())
             self.cq.put(a)
-            self.assertNotEqual(self.cq.get(), a)
+            self.assertNotEqual(a, self.cq.get())
         finally:
             crawle.HTTPConnectionQueue.REQUEST_LIMIT = prev
 
     def testGetConnectionCount(self):
         for i in range(5):
             conn = self.cq.get()
-            self.assertEqual(conn.request_count, 0)
+            self.assertEqual(0, conn.request_count)
 
     def testGetConnectionCountReplace(self):
         for i in range(5):
             conn = self.cq.get()
-            self.assertEqual(conn.request_count, i)
+            self.assertEqual(i, conn.request_count)
             self.cq.put(conn)
 
     def testLimitConnections(self):
@@ -149,6 +149,11 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 
 
 class TestHTTPConnectionControl(unittest.TestCase):
+    class PreProcessFailHandler(crawle.Handler):
+        """Helper class for one of the tests"""
+        def pre_process(self, req_res): req_res.response_url = None
+
+
     def setUp(self):
         self.cc = crawle.HTTPConnectionControl(crawle.Handler(), timeout=1)
 
@@ -162,7 +167,7 @@ class TestHTTPConnectionControl(unittest.TestCase):
 
     def testRequestPreProcess(self):
         rr = crawle.RequestResponse('http://google.com')
-        self.cc.handler = PreProcessFailHandler()
+        self.cc.handler = self.PreProcessFailHandler()
         self.assertRaises(crawle.CrawleRequestAborted, self.cc.request, rr)
 
     def testRequestInvalidMethod(self):
@@ -256,12 +261,52 @@ class TestController(unittest.TestCase):
         c = crawle.Controller(None, None, 1)
 
 
-###
-# HELPER CLASSES
-###
-class PreProcessFailHandler(crawle.Handler):
-    def pre_process(self, req_res): req_res.response_url = None
+class TestCrawlQueue(unittest.TestCase):
+    def queue_get(self):
+        if self.empty:
+            raise Queue.Empty
+        else:
+            return 1
 
-    
+    def queue_put(self, item): pass
+
+    def setUp(self):
+        self.q = crawle.CrawlQueue(single_threaded=True)
+        self.empty = False
+        self.q._get = self.queue_get
+        self.q._put = self.queue_put
+
+    def testGet(self):
+        self.assertEqual(0, self.q._workers)
+        self.q.get()
+        self.assertEqual(1, self.q._workers)
+        self.q.get()
+        self.assertEqual(2, self.q._workers)
+
+
+    def testEmpty(self):
+        self.empty = True
+        self.assertRaises(Queue.Empty, self.q.get)
+
+    def testPut(self):
+        self.assertEqual(0, self.q._workers)
+        self.q.get()
+        self.assertEqual(1, self.q._workers)
+        self.q.put(None)
+        self.assertEqual(1, self.q._workers)
+        self.q.put(None)
+        self.q.work_complete()
+        self.assertEqual(0, self.q._workers)
+        self.q.put(None)
+        self.q.work_complete()
+        self.assertEqual(0, self.q._workers)
+
+    def testSingleThreadException(self):
+        self.q.get()
+        self.empty = True
+        self.assertEqual
+        self.assertRaises(Exception, self.q.get)
+
+
 if __name__ == '__main__':
     unittest.main()

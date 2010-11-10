@@ -17,7 +17,7 @@ class SaveURLHandler(crawle.Handler):
 
     def process(self, req_res, queue):
         if not req_res.response_status:
-            print req_res.error_msg
+            print req_res.error
             return
 
         if req_res.response_status != 200:
