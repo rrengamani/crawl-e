@@ -432,24 +432,16 @@ class Controller(object):
 
     def join(self):
         """Join on all threads"""
-        count = 0
         for thread in self.threads:
             while 1:
                 thread.join(1)
                 if not thread.isAlive():
                     break
-            count += 1
-            sys.stdout.write('%d threads closed\r' % count)
-            sys.stdout.flush()
-        sys.stdout.write('                        \n')
-        sys.stdout.flush()
 
     def stop(self):
         """Stops all threads gracefully"""
         global STOP_CRAWLE
         STOP_CRAWLE = True
-        sys.stderr.write('Stop received\n')
-        sys.stderr.flush()
         self.join()
 
 
