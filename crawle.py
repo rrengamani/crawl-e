@@ -1,9 +1,9 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
-import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
-import subprocess, threading, time, urllib, urlparse
+import Queue, cStringIO, gzip, httplib, logging, mimetypes, resource, socket
+import sys, subprocess, threading, time, urllib, urlparse
 
-VERSION = '0.6'
+VERSION = '0.61'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
@@ -54,14 +54,15 @@ class RequestResponse(object):
     responses."""
 
     def __init__(self, url, headers=None, method='GET', params=None,
-                 redirects=10):
+                 files=None, redirects=10):
         """Constructs a RequestResponse object.
         
         Keyword Arguments:
         url -- The url to request.
         headers -- The http request headers.
         method -- The http request method.
-        params -- The http parameters.
+        params -- The http parameters as a dictionary.
+        files -- A list of tuples containing key, filename, filedata
         redirects -- The maximum number of redirects to follow.
         """
         self.error = None
@@ -72,6 +73,7 @@ class RequestResponse(object):
         self.request_url = url
         self.request_method = method
         self.request_params = params
+        self.request_files = files
 
         self.response_status = None
         self.response_url = url
@@ -313,7 +315,11 @@ class HTTPConnectionControl(object):
             
         try:
             start = time.time()
-            if req_res.request_params:
+            if req_res.request_files:
+                content_type, data = self.encode_multipart_formdata(
+                    req_res.request_params, req_res.request_files)
+                headers['Content-Type'] = content_type
+            elif req_res.request_params:
                 data = urllib.urlencode(req_res.request_params)
                 headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
@@ -359,6 +365,39 @@ class HTTPConnectionControl(object):
                     req_res.extra.append('Used zcat')
             else:
                 req_res.response_body = response_body
+
+    # The following function is modified from the snippet at:
+    # http://code.activestate.com/recipes/146306/
+    def encode_multipart_formdata(self, fields, files):
+        """Encode data properly when files are uploaded.
+        
+        Keyword Arguments:
+        fields -- A dictionary containing key value pairs for form submission
+        files -- A list of tuples with key, filename, file data for form
+                 submission.
+        """
+        default_type = 'application/octet-stream'
+        BOUNDARY = '----------ThIs_Is_tHe_bouNdaRY_$'
+        CRLF = '\r\n'
+        L = []
+        for key, value in fields.items():
+            L.append('--' + BOUNDARY)
+            L.append('Content-Disposition: form-data; name="%s"' % key)
+            L.append('')
+            L.append(value)
+        for (key, filename, value) in files:
+            L.append('--' + BOUNDARY)
+            L.append('Content-Disposition: form-data; name="%s"; filename="%s"'
+                     % (key, filename))
+            content_type = mimetypes.guess_type(filename)[0] or default_type
+            L.append('Content-Type: %s' % content_type)
+            L.append('')
+            L.append(value)
+        L.append('--' + BOUNDARY + '--')
+        L.append('')
+        body = CRLF.join(L)
+        content_type = 'multipart/form-data; boundary=%s' % BOUNDARY
+        return content_type, body
 
 
 class ControlThread(threading.Thread):
