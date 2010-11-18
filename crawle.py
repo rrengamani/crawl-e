@@ -3,7 +3,7 @@
 import Queue, cStringIO, gzip, httplib, logging, mimetypes, resource, socket
 import sys, subprocess, threading, time, urllib, urlparse
 
-VERSION = '0.61'
+VERSION = '0.6.1'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
