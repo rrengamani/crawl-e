@@ -1,0 +1,36 @@
+Authors
+---------------------
+Bryce Boe (bboe _at_ cs.ucsb.edu)
+Christo Wilson (bowlin _at_ cs.ucsb.edu)
+
+About
+---------------------
+CRAWL-E was designed to crawl the web fast fast as possible with as little
+development time as possible. It is only a framework, and requires the
+development of a Handler module in order to function properly.
+
+The CRAWL-E developers are very familiar with how TCP and HTTP works and using
+that knowledge have written a web crawler intended to maximize TCP throughput.
+This benefit is realized when crawling web servers that utilize persistent HTTP
+connections as numerous requests will be made over a single TCP connection thus
+increasing the throughput.
+
+Other features of CRAWL-E are multiple HTTP request method support, the most
+basic being GET, POST, PUT, DELETE, HEAD.
+
+Installation
+---------------------
+Requirements: python >= python2.5
+Run: python setup.py install
+Note: You will probably need to be a root user to install the package.
+
+Running
+---------------------
+Check out the page downloader in the examples folder. The script run_it.sh
+should be sufficient to get you started.
+
+The heart of CRAWL-E relies on extending the Crawle.Handler, in which one
+must implement a process function. This function is where all the magic can
+happen. We say can happen because it's entirely up to you what to do in this
+function. Some possibilities are parsing links to add to the queue, simply
+saving the contents of the page, or both!
