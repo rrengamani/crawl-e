@@ -3,7 +3,7 @@
 import Queue, cStringIO, gzip, httplib, logging, mimetypes, resource, socket
 import sys, subprocess, threading, time, urllib, urlparse
 
-VERSION = '0.6.1'
+VERSION = '0.6.2'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
@@ -597,10 +597,9 @@ class URLQueue(CrawlQueue):
     logger.setLevel(logging.DEBUG)
     logger.addHandler(sh)
 
-    LOG_AFTER = 1000
     LOG_STRING = 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)'
 
-    def __init__(self, seed_file=None, single_threaded=False):
+    def __init__(self, seed_file=None, single_threaded=False, log_after=1000):
         """Sets up the URLQueue by creating a queue.
         
         Keyword arguments:
@@ -610,6 +609,7 @@ class URLQueue(CrawlQueue):
         self.queue = []
         self.start_time = self.block_time = None
         self.total_items = 0
+        self.log_after = log_after
 
         # Add seeded items to the queue
         if seed_file:
@@ -646,10 +646,10 @@ class URLQueue(CrawlQueue):
             self.total_items += 1
             if self.start_time == None:
                 self.start_time = self.block_time = time.time()
-            elif (URLQueue.LOG_AFTER and
-                  self.total_items % URLQueue.LOG_AFTER == 0):
+            elif (self.log_after and
+                  self.total_items % self.log_after == 0):
                 now = time.time()
-                rps_now = URLQueue.LOG_AFTER / (now - self.block_time)
+                rps_now = self.log_after / (now - self.block_time)
                 rps_avg = self.total_items / (now - self.start_time)
                 log = URLQueue.LOG_STRING % (self.total_items,
                                              len(self.queue), rps_now,
@@ -671,7 +671,7 @@ def quick_request(url, redirects=30, timeout=30):
     cc.request(rr)
     return rr
 
-def run_crawle(argv, handler):
+def run_crawle(argv, handler, log_after=1):
     """The typical way to start CRAWL-E"""
     try:
         threads = int(argv[1])
@@ -684,7 +684,7 @@ def run_crawle(argv, handler):
     except IndexError:
         seed_file = None
 
-    queue_handler = URLQueue(seed_file)
+    queue_handler = URLQueue(seed_file, log_after=log_after)
 
     controller = Controller(handler=handler, queue=queue_handler,
                             num_threads=threads)
