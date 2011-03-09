@@ -151,7 +151,8 @@ class TestHTTPConnectionQueue(unittest.TestCase):
 class TestHTTPConnectionControl(unittest.TestCase):
     class PreProcessFailHandler(crawle.Handler):
         """Helper class for one of the tests"""
-        def pre_process(self, req_res): req_res.response_url = None
+        def pre_process(self, req_res):
+            req_res.response_url = None
 
 
     def setUp(self):
@@ -170,6 +171,27 @@ class TestHTTPConnectionControl(unittest.TestCase):
         self.cc.handler = self.PreProcessFailHandler()
         self.assertRaises(crawle.CrawleRequestAborted, self.cc.request, rr)
 
+    def testBuildRequestStandard(self):
+        rr = crawle.RequestResponse('http://127.0.0.1/CRAWL-E')
+        address, encrypted, url, headers = self.cc._build_request(rr)
+        self.assertEqual(('127.0.0.1', None), address)
+        self.assertEqual(False, encrypted)
+        self.assertEqual('/CRAWL-E', url)
+
+    def testBuildRequestHTTPS(self):
+        rr = crawle.RequestResponse('https://127.0.0.1/CRAWL-E/')
+        address, encrypted, url, headers = self.cc._build_request(rr)
+        self.assertEqual(('127.0.0.1', None), address)
+        self.assertEqual(True, encrypted)
+        self.assertEqual('/CRAWL-E/', url)
+
+    def testBuildRequestNonStandardPort(self):
+        rr = crawle.RequestResponse('http://127.0.0.1:1337/')
+        address, encrypted, url, headers = self.cc._build_request(rr)
+        self.assertEqual(('127.0.0.1', 1337), address)
+        self.assertEqual(False, encrypted)
+        self.assertEqual('/', url)
+
     def testRequestInvalidMethod(self):
         rr = crawle.RequestResponse('http://www.google.com', method='INVALID')
         self.cc.request(rr)
@@ -187,7 +209,8 @@ class TestHTTPConnectionControl(unittest.TestCase):
         urls = ['invalid', 'http:///invalid', 'httpz://google.com']
         for url in urls:
             rr = crawle.RequestResponse(url)
-            self.assertRaises(crawle.CrawleUnsupportedScheme, self.cc.request, rr)
+            self.assertRaises(crawle.CrawleUnsupportedScheme, self.cc.request,
+                              rr)
 
     def testRequest301(self):
         rr = crawle.RequestResponse('http://google.com', redirects=None)

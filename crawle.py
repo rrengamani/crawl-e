@@ -278,15 +278,8 @@ class HTTPConnectionControl(object):
         self.cq_lru = CQueueLRU(max_queues, max_conn)
         self.handler = handler
 
-    def request(self, req_res):
-        """Handles the request to the server."""
-        if STOP_CRAWLE:
-            raise CrawleStopped()
-
-        self.handler.pre_process(req_res)
-        if req_res.response_url == None:
-            raise CrawleRequestAborted()
-
+    def _build_request(self, req_res):
+        """Construct request headers and URI from request_response object."""
         u = urlparse.urlparse(req_res.response_url)
         if u.scheme not in ['http', 'https'] or u.netloc == '':
             raise CrawleUnsupportedScheme()
@@ -294,7 +287,7 @@ class HTTPConnectionControl(object):
         address = socket.gethostbyname(u.hostname), u.port
         encrypted = u.scheme == 'https'
 
-        request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
+        url = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
         if req_res.request_headers:
             headers = req_res.request_headers
         else:
@@ -306,11 +299,24 @@ class HTTPConnectionControl(object):
         if 'Accept-Languge' not in headers:
             headers['Accept-Language'] = HEADER_DEFAULTS['Accept-Language']
         if 'Host' not in headers:
-            headers['Host'] = u.hostname
+            if u.port == None:
+                headers['Host'] = u.hostname
+            else:
+                headers['Host'] = '%s:%d' % (u.hostname, u.port)
         if 'User-Agent' not in headers:
             headers['User-Agent'] = HEADER_DEFAULTS['User-Agent']
+        return address, encrypted, url, headers
 
+    def request(self, req_res):
+        """Handles the request to the server."""
+        if STOP_CRAWLE:
+            raise CrawleStopped()
 
+        self.handler.pre_process(req_res)
+        if req_res.response_url == None:
+            raise CrawleRequestAborted()
+
+        address, encrypted, url, headers = self._build_request(req_res)
         connection = self.cq_lru[(address, encrypted)]
             
         try:
@@ -324,7 +330,7 @@ class HTTPConnectionControl(object):
                 headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
                 data = ''
-            connection.request(req_res.request_method, request, data, headers)
+            connection.request(req_res.request_method, url, data, headers)
             response = connection.getresponse()
             response_time = time.time() - start
             response_body = response.read()
