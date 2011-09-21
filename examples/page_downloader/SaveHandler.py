@@ -17,7 +17,7 @@ class SaveURLHandler(crawle.Handler):
 
     def process(self, req_res, queue):
         if not req_res.response_status:
-            print req_res.error_msg
+            print req_res.error
             return
 
         if req_res.response_status != 200:
@@ -39,5 +39,4 @@ class SaveURLHandler(crawle.Handler):
         self.output.close()
 
 if __name__ == '__main__':
-    crawle.URLQueue.LOG_AFTER = 1
     crawle.run_crawle(sys.argv, handler=SaveURLHandler('output.gz'))

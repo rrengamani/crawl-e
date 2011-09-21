@@ -1,14 +1,13 @@
 """CRAWL-E is a highly distributed web crawling framework."""
 
-import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
-import subprocess, threading, time, urllib, urlparse
+import Queue, cStringIO, gzip, httplib, logging, mimetypes, resource, socket
+import sys, subprocess, threading, time, urllib, urlparse
 from optparse import OptionParser
 
-VERSION = '0.5.1'
+VERSION = '0.6.4'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
-EMPTY_QUEUE_WAIT = 5
 STOP_CRAWLE = False
 
 class CrawleException(Exception):
@@ -56,14 +55,15 @@ class RequestResponse(object):
     responses."""
 
     def __init__(self, url, headers=None, method='GET', params=None,
-                 redirects=10):
+                 files=None, redirects=10):
         """Constructs a RequestResponse object.
         
         Keyword Arguments:
         url -- The url to request.
         headers -- The http request headers.
         method -- The http request method.
-        params -- The http parameters.
+        params -- The http parameters as a dictionary.
+        files -- A list of tuples containing key, filename, filedata
         redirects -- The maximum number of redirects to follow.
         """
         self.error = None
@@ -74,6 +74,7 @@ class RequestResponse(object):
         self.request_url = url
         self.request_method = method
         self.request_params = params
+        self.request_files = files
 
         self.response_status = None
         self.response_url = url
@@ -278,15 +279,8 @@ class HTTPConnectionControl(object):
         self.cq_lru = CQueueLRU(max_queues, max_conn)
         self.handler = handler
 
-    def request(self, req_res):
-        """Handles the request to the server."""
-        if STOP_CRAWLE:
-            raise CrawleStopped()
-
-        self.handler.pre_process(req_res)
-        if req_res.response_url == None:
-            raise CrawleRequestAborted()
-
+    def _build_request(self, req_res):
+        """Construct request headers and URI from request_response object."""
         u = urlparse.urlparse(req_res.response_url)
         if u.scheme not in ['http', 'https'] or u.netloc == '':
             raise CrawleUnsupportedScheme()
@@ -294,7 +288,7 @@ class HTTPConnectionControl(object):
         address = socket.gethostbyname(u.hostname), u.port
         encrypted = u.scheme == 'https'
 
-        request = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
+        url = urlparse.urlunparse(('', '', u.path, u.params, u.query, ''))
         if req_res.request_headers:
             headers = req_res.request_headers
         else:
@@ -306,21 +300,38 @@ class HTTPConnectionControl(object):
         if 'Accept-Languge' not in headers:
             headers['Accept-Language'] = HEADER_DEFAULTS['Accept-Language']
         if 'Host' not in headers:
-            headers['Host'] = u.hostname
+            if u.port == None:
+                headers['Host'] = u.hostname
+            else:
+                headers['Host'] = '%s:%d' % (u.hostname, u.port)
         if 'User-Agent' not in headers:
             headers['User-Agent'] = HEADER_DEFAULTS['User-Agent']
+        return address, encrypted, url, headers
 
+    def request(self, req_res):
+        """Handles the request to the server."""
+        if STOP_CRAWLE:
+            raise CrawleStopped()
 
+        self.handler.pre_process(req_res)
+        if req_res.response_url == None:
+            raise CrawleRequestAborted()
+
+        address, encrypted, url, headers = self._build_request(req_res)
         connection = self.cq_lru[(address, encrypted)]
             
         try:
             start = time.time()
-            if req_res.request_params:
+            if req_res.request_files:
+                content_type, data = self.encode_multipart_formdata(
+                    req_res.request_params, req_res.request_files)
+                headers['Content-Type'] = content_type
+            elif req_res.request_params:
                 data = urllib.urlencode(req_res.request_params)
                 headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
                 data = ''
-            connection.request(req_res.request_method, request, data, headers)
+            connection.request(req_res.request_method, url, data, headers)
             response = connection.getresponse()
             response_time = time.time() - start
             response_body = response.read()
@@ -362,11 +373,42 @@ class HTTPConnectionControl(object):
             else:
                 req_res.response_body = response_body
 
+    # The following function is modified from the snippet at:
+    # http://code.activestate.com/recipes/146306/
+    def encode_multipart_formdata(self, fields, files):
+        """Encode data properly when files are uploaded.
+        
+        Keyword Arguments:
+        fields -- A dictionary containing key value pairs for form submission
+        files -- A list of tuples with key, filename, file data for form
+                 submission.
+        """
+        default_type = 'application/octet-stream'
+        BOUNDARY = '----------ThIs_Is_tHe_bouNdaRY_$'
+        CRLF = '\r\n'
+        L = []
+        for key, value in fields.items():
+            L.append('--' + BOUNDARY)
+            L.append('Content-Disposition: form-data; name="%s"' % key)
+            L.append('')
+            L.append(value)
+        for (key, filename, value) in files:
+            L.append('--' + BOUNDARY)
+            L.append('Content-Disposition: form-data; name="%s"; filename="%s"'
+                     % (key, filename))
+            content_type = mimetypes.guess_type(filename)[0] or default_type
+            L.append('Content-Type: %s' % content_type)
+            L.append('')
+            L.append(value)
+        L.append('--' + BOUNDARY + '--')
+        L.append('')
+        body = CRLF.join(L)
+        content_type = 'multipart/form-data; boundary=%s' % BOUNDARY
+        return content_type, body
+
 
 class ControlThread(threading.Thread):
     """A single thread of control"""
-    EMPTY_QUEUE_RETRYS = 0
-    stop_wait_event = threading.Event()
 
     def __init__(self, connection_control, handler, queue):
         """Sets up the ControlThread.
@@ -385,49 +427,21 @@ class ControlThread(threading.Thread):
     def run(self):
         """This is the execution order of a single thread.
         
-        The threads will stop when STOP_CRAWLE becomes true, when the queue
-        raises an exception, or when a returned url is None.
+        The threads will stop when STOP_CRAWLE becomes true, or when the queue
+        raises Queue.Empty.
         """
-        retry_count = 0
-        global STOP_CRAWLE
         while not STOP_CRAWLE:
             try:
                 request_response = self.queue.get()
-            except Exception, e:
-                if not STOP_CRAWLE:
-                    sys.stdout.write('Queue error - stopping CRAWL-E\n')
-                    sys.stdout.flush()
-                    STOP_CRAWLE = True
-                sys.stdout.write('%s: %s\n' % (str(type(e)), e.__str__()))
+            except Queue.Empty:
                 break
 
-        # The thread notification needs to change a bit to take account of
-        # threads which may be working at the time the queue is empty, rather
-        # than simply sleeping for a given time period.
-
-            if request_response is None:
-                ControlThread.stop_wait_event.clear()
-                ControlThread.stop_wait_event.wait(EMPTY_QUEUE_WAIT)
-                if ControlThread.stop_wait_event.isSet():
-                    continue
-                if retry_count < ControlThread.EMPTY_QUEUE_RETRYS:
-                    retry_count += 1
-                    continue
-
-                if not STOP_CRAWLE:
-                    sys.stdout.write('Queue empty - stopping CRAWL-E\n')
-                    sys.stdout.flush()
-                    STOP_CRAWLE = True
-                break
-
-            retry_count = 0
             try:
                 self.connection_control.request(request_response)
             except Exception, e:
                 request_response.error = e
             self.handler.process(request_response, self.queue)
-
-            ControlThread.stop_wait_event.set()            
+            self.queue.work_complete()
 
 
 class Controller(object):
@@ -450,11 +464,6 @@ class Controller(object):
                                                      max_conn=num_threads,
                                                      timeout=timeout)
         self.handler = handler
-        # HACK AROUND THIS FOR NOW
-        global STOP_CRAWLE
-        STOP_CRAWLE = False
-
-        ControlThread.EMPTY_QUEUE_RETRYS = 1
 
         self.threads = []
         for _ in range(num_threads):
@@ -469,29 +478,17 @@ class Controller(object):
 
     def join(self):
         """Join on all threads"""
-        count = 0
         for thread in self.threads:
             while 1:
                 thread.join(1)
                 if not thread.isAlive():
                     break
-            count += 1
-            sys.stdout.write('%d threads closed\r' % count)
-            sys.stdout.flush()
-        sys.stdout.write('                        \n')
-        sys.stdout.flush()
 
     def stop(self):
         """Stops all threads gracefully"""
         global STOP_CRAWLE
         STOP_CRAWLE = True
-        sys.stderr.write('Stop received\n')
-        sys.stderr.flush()
         self.join()
-
-    def crawl_finished(self):
-        """Indicates the the crawl has completed."""
-        return STOP_CRAWLE
 
 
 class VisitURLHandler(Handler):
@@ -508,17 +505,92 @@ class VisitURLHandler(Handler):
 
 
 class CrawlQueue(object):
-    """CrawlQueue is an abstract class in the sense that it needs to be
-    subclassed with its get and put methods defined."""
+    """Crawl Queue is a mostly abstract concurrent Queue class.
+
+    Users of this class must implement their specific __init__, _get, and _put
+    functions both initialize their queue, get items from the queue, and put
+    items into the queue.
+
+    The CrawlQueue class takes care of concurrency issues, so that subclass
+    implementations can be assured atomic accesses to the user defined _get and
+    _put functions. As such both the user defined _get and _put functions
+    should be nonblocking.
+
+    In addition to assuring atomic access, the CrawlQueue class manages the
+    number of outstanding workers so that it only raises Queue.Empty when both
+    its queue it empty and there is no outstanding work.
+    """
+
+    def __init__(self, single_threaded=False):
+        """Initializes the CrawlQueue class with a condition variable and
+        container for the numer of workers."""
+        if not single_threaded:
+            self._lock = threading.Lock()
+            self.cv = threading.Condition(self._lock)
+        else:
+            self.cv = None
+        self._workers = 0
 
     def get(self):
-        """The get function must return a RequestResponse object."""
-        raise NotImplementedError('CrawlQueue.get() must be implemented')
-    
-    def put(self, queue_item):
-        """The put function should put the queue_item back on the queue."""
-        assert queue_item # pychecker hack
-        raise NotImplementedError('CrawlQueue.put(...) must be implemented')
+        """The interface to obtaining an object from the queue.  This function
+        manages the concurrency and waits for more items if there is
+        outstanding work, otherwise it raises Queue.Empty. This class should
+        not be overwritten, but rather the user should write a _get class.
+        """
+        while True:
+            if self.cv:
+                self.cv.acquire()
+            try:
+                item = self._get()
+                self._workers += 1
+                return item
+            except Queue.Empty:
+                if self._workers == 0:
+                    if self.cv:
+                        self.cv.notify_all()
+                    raise
+                if not self.cv:
+                    raise Exception('Invalid single thread handling')
+                self.cv.wait()
+            finally:
+                if self.cv:
+                    self.cv.release()
+
+    def put(self, item):
+        """The interface for putting an item on the queue. This function
+        manages concurrency and notifies other threads when an item is
+        added."""
+        if self.cv:
+            self.cv.acquire()
+        try:
+            self._put(item)
+            if self.cv:
+                self.cv.notify()
+        finally:
+            if self.cv:
+                self.cv.release()
+
+    def work_complete(self):
+        """Called by the ControlThread after the user defined handler has
+        returned thus indicating no more items will be added to the queue from
+        that thread before the next call to get."""
+        if self.cv:
+            self.cv.acquire()
+        if self._workers > 0:
+            self._workers -= 1
+        if self.cv:
+            self.cv.notify()
+            self.cv.release()
+
+    def _get(self):
+        """Function to be implemented by the user."""
+        raise NotImplementedError('CrawlQueue._get() must be implemented')
+
+    def _put(self, item):
+        """Function to be implemented by the user."""
+        assert item # pychecker hack
+        raise NotImplementedError('CrawlQueue._put(...) must be implemented')
+
 
 class URLQueue(CrawlQueue):
     """URLQueue is the most basic queue type and is all that is needed for
@@ -532,19 +604,19 @@ class URLQueue(CrawlQueue):
     logger.setLevel(logging.DEBUG)
     logger.addHandler(sh)
 
-    LOG_AFTER = 1000
     LOG_STRING = 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)'
 
-    def __init__(self, seed_file=None, seed_urls=None):
+    def __init__(self, seed_file=None, seed_urls=None, single_threaded=False, log_after=1000):
         """Sets up the URLQueue by creating a queue.
         
         Keyword arguments:
         seedfile -- file containing urls to seed the queue (default None)
         """
-        self.queue = Queue.Queue(0)
-        self.lock = threading.Lock()
+        super(URLQueue, self).__init__(single_threaded)
+        self.queue = []
         self.start_time = self.block_time = None
         self.total_items = 0
+        self.log_after = log_after
 
         # Add seeded items to the queue
         if seed_file:
@@ -552,10 +624,8 @@ class URLQueue(CrawlQueue):
                 fp = open(seed_file)
             except IOError:
                 raise Exception('Could not open seed file')
-            count = 0
             for line in fp:
-                self.queue.put(line.strip())
-                count += 1
+                self.queue.append(line.strip())
             fp.close()
             URLQueue.logger.info('Queued: %d from seed file' % count)
         if seed_urls:
@@ -572,43 +642,37 @@ class URLQueue(CrawlQueue):
             URLQueue.logger.warn('Could not open file for saving.')
             fp = sys.stdout
         items = 0
-        while not self.queue.empty():
-            try:
-                item = self.queue.get(block=False)
-                fp.write('%s\n' % item)
-                items += 1
-            except Queue.Empty:
-                URLQueue.logger.error('Queue is empty when it shouldn\'t be.')
+        for item in self.queue:
+            fp.write('%s\n' % item)
+            items += 1
         if fp != sys.stdout:
             fp.close()
         URLQueue.logger.info('Saved %d items.' % items)
 
-    def get(self):
-        """Return url at the head of the queue or None if empty"""
-        try:
-            url = self.queue.get(block=False)
-            self.lock.acquire()
+    def _get(self):
+        """Return url at the head of the queue or raise Queue.Empty"""
+        if len(self.queue):
+            url = self.queue.pop(0)
             self.total_items += 1
             if self.start_time == None:
                 self.start_time = self.block_time = time.time()
-            elif (URLQueue.LOG_AFTER and
-                  self.total_items % URLQueue.LOG_AFTER == 0):
+            elif (self.log_after and
+                  self.total_items % self.log_after == 0):
                 now = time.time()
-                rps_now = URLQueue.LOG_AFTER / (now - self.block_time)
+                rps_now = self.log_after / (now - self.block_time)
                 rps_avg = self.total_items / (now - self.start_time)
                 log = URLQueue.LOG_STRING % (self.total_items,
-                                             self.queue.qsize(), rps_now,
+                                             len(self.queue), rps_now,
                                              rps_avg)
                 URLQueue.logger.info(log)
                 self.block_time = now
-            self.lock.release()
             return RequestResponse(url)
-        except Queue.Empty:
-            return None
+        else:
+            raise Queue.Empty
 
-    def put(self, url):
+    def _put(self, url):
         """Puts the item back on the queue."""
-        self.queue.put(url)
+        self.queue.append(url)
 
 def quick_request(url, redirects=30, timeout=30):
     """Convenience function to quickly request a URL within CRAWl-E."""
@@ -617,7 +681,7 @@ def quick_request(url, redirects=30, timeout=30):
     cc.request(rr)
     return rr
 
-def run_crawle(argv, handler):
+def run_crawle(argv, handler, log_after=1):
     """The typical way to start CRAWL-E"""
     parser = OptionParser()
     parser.add_option('-t', '--threads', help='number of threads to use',
