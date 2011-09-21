@@ -2,8 +2,9 @@
 
 import Queue, cStringIO, gzip, httplib, logging, resource, socket, sys
 import subprocess, threading, time, urllib, urlparse
+from optparse import OptionParser
 
-VERSION = '0.5'
+VERSION = '0.5.1'
 HEADER_DEFAULTS = {'Accept':'*/*', 'Accept-Language':'en-us,en;q=0.8',
                    'User-Agent':'CRAWL-E/%s' % VERSION}
 DEFAULT_SOCKET_TIMEOUT = 30
@@ -534,7 +535,7 @@ class URLQueue(CrawlQueue):
     LOG_AFTER = 1000
     LOG_STRING = 'Crawled: %d Remaining: %d RPS: %.2f (%.2f avg)'
 
-    def __init__(self, seed_file=None):
+    def __init__(self, seed_file=None, seed_urls=None):
         """Sets up the URLQueue by creating a queue.
         
         Keyword arguments:
@@ -556,8 +557,11 @@ class URLQueue(CrawlQueue):
                 self.queue.put(line.strip())
                 count += 1
             fp.close()
-            URLQueue.logger.info('Queued: %d' % count)
-        else:
+            URLQueue.logger.info('Queued: %d from seed file' % count)
+        if seed_urls:
+            [self.queue.put(x) for x in seed_urls]
+            URLQueue.logger.info('Queued: %d from seed url' % len(seed_urls))
+        if self.queue.empty:
             URLQueue.logger.info('Starting with empty queue')
 
     def save(self, save_file):
@@ -615,27 +619,25 @@ def quick_request(url, redirects=30, timeout=30):
 
 def run_crawle(argv, handler):
     """The typical way to start CRAWL-E"""
-    try:
-        threads = int(argv[1])
-    except (IndexError, ValueError):
-        sys.stdout.write('Usage: %s threads [seedfile]\n' % argv[0])
-        sys.exit(1)
+    parser = OptionParser()
+    parser.add_option('-t', '--threads', help='number of threads to use',
+                      type='int', default=1)
+    parser.add_option('-s', '--seed', help='file to seed queue with')
+    parser.add_option('-u', '--url', help='url to seed queue with',
+                      action='append', metavar='URL', dest='urls')
+    parser.add_option('-S', '--save', help='file to save remaining urls to')
+    options, args = parser.parse_args()
 
-    try:
-        seed_file = argv[2]
-    except IndexError:
-        seed_file = None
-
-    queue_handler = URLQueue(seed_file)
-
+    queue_handler = URLQueue(seed_file=options.seed, seed_urls=options.urls)
     controller = Controller(handler=handler, queue=queue_handler,
-                            num_threads=threads)
+                            num_threads=options.threads)
     controller.start()
     try:
         controller.join()
     except KeyboardInterrupt:
         controller.stop()
-    queue_handler.save(seed_file)
+    if options.save:
+        queue_handler.save(options.save)
 
 if __name__ == '__main__':
     """Basic example of how to start CRAWL-E."""
