@@ -627,11 +627,11 @@ class URLQueue(CrawlQueue):
             for line in fp:
                 self.queue.append(line.strip())
             fp.close()
-            URLQueue.logger.info('Queued: %d from seed file' % count)
+            URLQueue.logger.info('Queued: %d from seed file' % len(self.queue))
         if seed_urls:
             [self.queue.put(x) for x in seed_urls]
             URLQueue.logger.info('Queued: %d from seed url' % len(seed_urls))
-        if self.queue.empty:
+        if len(self.queue) == 0:
             URLQueue.logger.info('Starting with empty queue')
 
     def save(self, save_file):
